@@ -1,0 +1,8 @@
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+node_modules/
+uv.lock
+package-lock.json
+agentic_observatory/static/dist/

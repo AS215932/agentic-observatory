@@ -1,0 +1,29 @@
+{% extends "base.html" %}{% block content %}
+<h1>Handoffs</h1>
+<table>
+  <thead>
+    <tr>
+      <th>Handoff</th>
+      <th>Case</th>
+      <th>Target</th>
+      <th>Status</th>
+      <th>Objective</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for handoff in handoffs %}
+    <tr>
+      <td>{{ handoff.handoff_id }}</td>
+      <td><a href="/cases/{{ handoff.case_id }}">{{ handoff.case_id }}</a></td>
+      <td>{{ handoff.target_loop }}</td>
+      <td>{{ handoff.status }}</td>
+      <td>{{ handoff.objective }}</td>
+    </tr>
+    {% else %}
+    <tr>
+      <td colspan="5">No handoffs.</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

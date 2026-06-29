@@ -1,0 +1,56 @@
+{% extends "base.html" %}{% block content %}
+<h1>Verification objectives</h1>
+<table>
+  <thead>
+    <tr>
+      <th>Objective</th>
+      <th>Case</th>
+      <th>Handoff</th>
+      <th>Status</th>
+      <th>Passes</th>
+      <th>Action</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for objective in objectives %}
+    <tr>
+      <td>{{ objective.name or objective.objective_id }}</td>
+      <td>
+        <a href="/cases/{{ objective.case_id }}">{{ objective.case_id }}</a>
+      </td>
+      <td>{{ objective.handoff_id }}</td>
+      <td>{{ objective.status }}</td>
+      <td>
+        {{ objective.consecutive_pass_count }}/{{
+        objective.required_consecutive_passes }}
+      </td>
+      <td>
+        {% if actions_enabled %}
+        <form
+          method="post"
+          action="/actions/verification-objectives/{{ objective.objective_id }}/result"
+        >
+          <input
+            type="hidden"
+            name="csrf_token"
+            value="{{ csrf_token }}"
+          /><input
+            type="hidden"
+            name="idempotency_key"
+            value="verify-{{ range(1, 999999)|random }}"
+          /><input type="hidden" name="status" value="pass" /><input
+            name="evidence_ref"
+            placeholder="evidence ref"
+          /><button>Record pass</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% else %}
+    <tr>
+      <td colspan="6">No verification objectives.</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

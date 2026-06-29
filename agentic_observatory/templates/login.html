@@ -1,0 +1,15 @@
+{% extends "base.html" %}{% block title %}Login · Agentic Observatory{% endblock
+%}{% block content %}
+<section class="card narrow">
+  <h1>Operator login</h1>
+  <form method="post" action="/login">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+    <label>Username <input name="username" autocomplete="username" /></label>
+    <label
+      >Password
+      <input name="password" type="password" autocomplete="current-password"
+    /></label>
+    <button>Login</button>
+  </form>
+</section>
+{% endblock %}

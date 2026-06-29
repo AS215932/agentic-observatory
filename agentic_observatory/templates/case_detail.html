@@ -1,0 +1,79 @@
+{% extends "base.html" %}{% block content %} {% set case = detail.case or {} %}
+<h1>Case {{ case.case_number or case_id }}</h1>
+<section class="card">
+  <p>{{ case.title or case.summary }}</p>
+  <dl>
+    <dt>Status</dt>
+    <dd>{{ case.status }}</dd>
+    <dt>Severity</dt>
+    <dd>{{ case.severity }}</dd>
+    <dt>Resource</dt>
+    <dd>{{ case.resource_id }}</dd>
+  </dl>
+</section>
+{% if actions_enabled %}
+<section class="card">
+  <h2>Actions</h2>
+  <form method="post" action="/actions/cases/{{ case_id }}/feedback">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}" /><input
+      type="hidden"
+      name="idempotency_key"
+      value="{{ range(1, 999999)|random }}"
+    /><label>Feedback <input name="comment" /></label
+    ><button>Record feedback</button>
+  </form>
+  <form method="post" action="/actions/cases/{{ case_id }}/ack">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}" /><input
+      type="hidden"
+      name="idempotency_key"
+      value="ack-{{ range(1, 999999)|random }}"
+    /><button>Acknowledge</button>
+  </form>
+</section>
+{% endif %}
+<section class="card">
+  <h2>Timeline</h2>
+  <div
+    id="case-timeline-island"
+    data-src="/api/cases/{{ case_id }}/timeline"
+  ></div>
+  <table>
+    <thead>
+      <tr>
+        <th>When</th>
+        <th>Type</th>
+        <th>Actor</th>
+        <th>Summary</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in detail.timeline %}
+      <tr>
+        <td>{{ item.occurred_at or item.created_at }}</td>
+        <td>{{ item.event_type or item.item_type }}</td>
+        <td>{{ item.actor_id or item.actor }}</td>
+        <td>{{ item.summary or item.payload }}</td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="4">No timeline items.</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+<section class="grid">
+  <article class="card">
+    <h2>Handoffs</h2>
+    <pre>{{ detail.handoffs|tojson(indent=2) }}</pre>
+  </article>
+  <article class="card">
+    <h2>Verification</h2>
+    <pre>{{ detail.verification_objectives|tojson(indent=2) }}</pre>
+  </article>
+  <article class="card">
+    <h2>Knowledge</h2>
+    <pre>{{ detail.knowledge_artifacts|tojson(indent=2) }}</pre>
+  </article>
+</section>
+{% endblock %}

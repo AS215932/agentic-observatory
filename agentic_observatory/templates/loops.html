@@ -1,0 +1,26 @@
+{% extends "base.html" %}{% block content %}
+<h1>Agentic loops</h1>
+<div id="topology-island" data-src="/api/loops/topology" class="island">
+  <noscript>Static topology below.</noscript>
+</div>
+<table>
+  <thead>
+    <tr>
+      <th>Loop</th>
+      <th>Status</th>
+      <th>Host</th>
+      <th>Capabilities</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for item in loops %}
+    <tr>
+      <td><a href="/loops/{{ item.loop_id }}">{{ item.display_name }}</a></td>
+      <td>{{ item.status }}</td>
+      <td>{{ item.host }}</td>
+      <td>{{ item.capabilities|join(', ') }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

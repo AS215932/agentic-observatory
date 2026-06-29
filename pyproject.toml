@@ -1,0 +1,58 @@
+[project]
+name = "agentic-observatory"
+version = "0.1.0"
+description = "Internal operator console for AS215932 agentic loops"
+requires-python = ">=3.12"
+dependencies = [
+  "agent-core",
+  "argon2-cffi>=23.1",
+  "fastapi>=0.116",
+  "httpx>=0.27",
+  "jinja2>=3.1",
+  "pydantic>=2.10",
+  "pydantic-settings>=2.6",
+  "python-multipart>=0.0.9",
+  "sqlalchemy[asyncio]>=2.0",
+  "aiosqlite>=0.20",
+  "asyncpg>=0.29",
+  "uvicorn[standard]>=0.30",
+]
+
+[project.scripts]
+agentic-observatory = "agentic_observatory.app:main"
+
+[dependency-groups]
+dev = [
+  "mypy>=1.10",
+  "pytest>=8.2",
+  "pytest-asyncio>=0.23",
+  "respx>=0.21",
+  "ruff>=0.6",
+]
+
+[tool.uv.sources]
+agent-core = { git = "https://github.com/AS215932/agent-core", tag = "v0.5.0" }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["agentic_observatory"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "RUF", "B"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

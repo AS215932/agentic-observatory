@@ -1,0 +1,31 @@
+{% extends "base.html" %}{% block content %}
+<h1>Run {{ run_id }}</h1>
+<section class="card"><pre>{{ run|tojson(indent=2) }}</pre></section>
+<div id="run-replay-island" data-src="/api/runs/{{ run_id }}/replay"></div>
+<table>
+  <thead>
+    <tr>
+      <th>Time</th>
+      <th>Type</th>
+      <th>Node</th>
+      <th>Summary</th>
+      <th>Case</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for event in events %}
+    <tr>
+      <td>{{ event.timestamp or event.received_at }}</td>
+      <td>{{ event.event_type }}</td>
+      <td>{{ event.node_id }}</td>
+      <td>{{ event.summary }}</td>
+      <td>{{ event.case_id }}</td>
+    </tr>
+    {% else %}
+    <tr>
+      <td colspan="5">No trace events.</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

@@ -1,0 +1,16 @@
+{% extends "base.html" %}{% block content %}
+<h1>{{ loop.display_name }}</h1>
+<section class="card">
+  <dl>
+    <dt>Status</dt>
+    <dd>{{ loop.status }}</dd>
+    <dt>Service</dt>
+    <dd>{{ loop.service_name }}</dd>
+    <dt>Host</dt>
+    <dd>{{ loop.host }}</dd>
+    <dt>Capabilities</dt>
+    <dd>{{ loop.capabilities|join(', ') }}</dd>
+  </dl>
+</section>
+<h2>Recent runs</h2>
+{% include "partials/run_table.html" %}{% endblock %}

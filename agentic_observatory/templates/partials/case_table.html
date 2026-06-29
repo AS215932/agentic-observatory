@@ -1,0 +1,28 @@
+<table>
+  <thead>
+    <tr>
+      <th>Case</th>
+      <th>Status</th>
+      <th>Severity</th>
+      <th>Summary</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for case in cases %}
+    <tr>
+      <td>
+        <a href="/cases/{{ case.case_id }}"
+          >{{ case.case_number or case.case_id }}</a
+        >
+      </td>
+      <td>{{ case.status }}</td>
+      <td>{{ case.severity }}</td>
+      <td>{{ case.title or case.summary }}</td>
+    </tr>
+    {% else %}
+    <tr>
+      <td colspan="4">No cases available.</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>

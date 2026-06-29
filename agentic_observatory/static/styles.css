@@ -1,0 +1,131 @@
+:root {
+  color-scheme: dark;
+  --bg: #0b1020;
+  --card: #121a33;
+  --text: #eef3ff;
+  --muted: #9fb0d0;
+  --accent: #7cd4ff;
+  --bad: #ff7c9b;
+  --good: #8df0a4;
+}
+body {
+  margin: 0;
+  background: radial-gradient(circle at top left, #1f3567, #0b1020 40%);
+  color: var(--text);
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+}
+.topbar {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  padding: 1rem;
+  border-bottom: 1px solid #263455;
+  background: #0b102bcc;
+  position: sticky;
+  top: 0;
+}
+.brand {
+  font-weight: 800;
+  color: var(--text);
+  text-decoration: none;
+}
+nav {
+  display: flex;
+  gap: 0.7rem;
+  flex: 1;
+  flex-wrap: wrap;
+}
+a {
+  color: var(--accent);
+}
+main {
+  padding: 1.5rem;
+  max-width: 1400px;
+  margin: auto;
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 1rem;
+}
+.cards {
+  margin-bottom: 1rem;
+}
+.card {
+  background: linear-gradient(180deg, #142142, #111832);
+  border: 1px solid #2b3b63;
+  border-radius: 16px;
+  padding: 1rem;
+  box-shadow: 0 10px 30px #0006;
+}
+.narrow {
+  max-width: 32rem;
+  margin: 5rem auto;
+}
+.banner {
+  background: #463711;
+  border: 1px solid #816620;
+  padding: 0.75rem;
+  border-radius: 12px;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #111832;
+  border-radius: 12px;
+  overflow: hidden;
+}
+th,
+td {
+  padding: 0.6rem;
+  border-bottom: 1px solid #243454;
+  text-align: left;
+  vertical-align: top;
+}
+th {
+  color: var(--muted);
+  font-size: 0.85rem;
+  text-transform: uppercase;
+}
+input,
+select,
+button {
+  border-radius: 8px;
+  border: 1px solid #36507c;
+  background: #0d1429;
+  color: var(--text);
+  padding: 0.5rem;
+}
+button {
+  background: #205986;
+  cursor: pointer;
+}
+label {
+  display: block;
+  margin: 0.5rem 0;
+}
+.inline {
+  display: inline;
+}
+.status.active,
+.status.succeeded,
+.better {
+  color: var(--good);
+}
+.status.failed,
+.worse {
+  color: var(--bad);
+}
+pre {
+  white-space: pre-wrap;
+  overflow: auto;
+}
+.island svg {
+  max-width: 100%;
+  height: auto;
+}
+footer {
+  color: var(--muted);
+  padding: 2rem;
+  text-align: center;
+}

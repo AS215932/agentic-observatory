@@ -1,0 +1,52 @@
+{% extends "base.html" %}{% block content %}
+<h1>North Star console</h1>
+<section class="grid cards">
+  {% for item in loops %}
+  <article class="card">
+    <h2><a href="/loops/{{ item.loop_id }}">{{ item.display_name }}</a></h2>
+    <p class="status {{ item.status }}">{{ item.status }}</p>
+    <p>{{ item.summary }}</p>
+    <p>recent actions: {{ item.recent_action_count }}</p>
+  </article>
+  {% endfor %}
+</section>
+<section class="grid">
+  <article class="card">
+    <h2>Recent cases</h2>
+    {% include "partials/case_table.html" %}
+  </article>
+  <article class="card">
+    <h2>Recent runs</h2>
+    {% include "partials/run_table.html" %}
+  </article>
+</section>
+<section class="card">
+  <h2>Recent audit</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>Actor</th>
+        <th>Action</th>
+        <th>Target</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for event in audit %}
+      <tr>
+        <td>{{ event.created_at }}</td>
+        <td>{{ event.actor_id }}</td>
+        <td>{{ event.action }}</td>
+        <td>{{ event.target_type }} {{ event.target_id }}</td>
+        <td>{{ event.status }}</td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="5">No audited actions yet.</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

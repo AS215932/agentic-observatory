@@ -1,0 +1,35 @@
+{% extends "base.html" %}{% block content %}
+<h1>Knowledge artifacts</h1>
+<table>
+  <thead>
+    <tr>
+      <th>Artifact</th>
+      <th>Case</th>
+      <th>Type</th>
+      <th>Status</th>
+      <th>Summary</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for artifact in artifacts %}
+    <tr>
+      <td>
+        <a href="/knowledge/artifacts/{{ artifact.artifact_id }}"
+          >{{ artifact.artifact_id }}</a
+        >
+      </td>
+      <td>
+        <a href="/cases/{{ artifact.case_id }}">{{ artifact.case_id }}</a>
+      </td>
+      <td>{{ artifact.artifact_type }}</td>
+      <td>{{ artifact.review_status or artifact.status }}</td>
+      <td>{{ artifact.summary }}</td>
+    </tr>
+    {% else %}
+    <tr>
+      <td colspan="5">No artifacts.</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

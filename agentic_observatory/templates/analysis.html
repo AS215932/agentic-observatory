@@ -1,0 +1,31 @@
+{% extends "base.html" %}{% block content %}
+<h1>Balanced impact analysis</h1>
+<table>
+  <thead>
+    <tr>
+      <th>Change</th>
+      <th>Verdict</th>
+      <th>Total delta</th>
+      <th>Summary</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for report in reports %}
+    <tr>
+      <td>
+        <a href="/changes/{{ report.change_key|urlencode }}"
+          >{{ report.change_key }}</a
+        >
+      </td>
+      <td>{{ report.verdict }}</td>
+      <td>{{ report.total_delta }}</td>
+      <td>{{ report.summary }}</td>
+    </tr>
+    {% else %}
+    <tr>
+      <td colspan="4">No change impact reports yet.</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

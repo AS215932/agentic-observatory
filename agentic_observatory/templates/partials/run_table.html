@@ -1,0 +1,26 @@
+<table>
+  <thead>
+    <tr>
+      <th>Run</th>
+      <th>Loop</th>
+      <th>Status</th>
+      <th>Summary</th>
+      <th>Cost</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for run in runs %}
+    <tr>
+      <td><a href="/runs/{{ run.run_id }}">{{ run.run_id }}</a></td>
+      <td>{{ run.loop_id or run.graph_id }}</td>
+      <td>{{ run.status }}</td>
+      <td>{{ run.title or run.summary }}</td>
+      <td>{{ run.cost_usd or '' }}</td>
+    </tr>
+    {% else %}
+    <tr>
+      <td colspan="5">No runs available.</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>

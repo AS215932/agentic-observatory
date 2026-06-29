@@ -1,0 +1,23 @@
+{% extends "base.html" %}{% block content %}
+<h1>Changes</h1>
+<table>
+  <thead>
+    <tr>
+      <th>Change</th>
+      <th>Impact</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for key in change_keys %}
+    <tr>
+      <td><a href="/changes/{{ key|urlencode }}">{{ key }}</a></td>
+      <td><a href="/api/changes/{{ key|urlencode }}/impact">JSON impact</a></td>
+    </tr>
+    {% else %}
+    <tr>
+      <td colspan="2">No change-linked runs or actions yet.</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

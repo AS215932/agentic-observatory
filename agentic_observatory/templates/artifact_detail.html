@@ -1,0 +1,26 @@
+{% extends "base.html" %}{% block content %}
+<h1>Knowledge artifact {{ artifact.artifact_id }}</h1>
+<section class="card"><pre>{{ artifact|tojson(indent=2) }}</pre></section>
+{% if actions_enabled %}
+<section class="card">
+  <h2>Review</h2>
+  <form
+    method="post"
+    action="/actions/knowledge-artifacts/{{ artifact.artifact_id }}/review"
+  >
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}" /><input
+      type="hidden"
+      name="idempotency_key"
+      value="ka-{{ range(1, 999999)|random }}"
+    /><label
+      >Status
+      <select name="review_status">
+        <option>approved</option>
+        <option>rejected</option>
+        <option>pending</option>
+      </select></label
+    ><label>Comment <input name="comment" /></label
+    ><button>Submit review</button>
+  </form>
+</section>
+{% endif %}{% endblock %}
