@@ -10,13 +10,28 @@ from typing import Any
 import httpx
 from pydantic import AnyHttpUrl
 
+_TOKEN_ALLOWED = {"_", "-", ":", ".", "/"}
+
 
 def _canonical_json(body: Any) -> str:
-    return json.dumps(body if body is not None else {}, sort_keys=True, separators=(",", ":"), default=str)
+    return json.dumps(body if body is not None else {}, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
+
+
+def _sanitize_loop_token(value: Any, *, limit: int = 128) -> str:
+    text = str(value or "")
+    kept = [ch for ch in text if ch.isalnum() or ch in _TOKEN_ALLOWED]
+    return ("".join(kept) or "unknown")[: max(1, limit)]
 
 
 def build_loop_signature(*, secret: str, method: str, path: str, timestamp: str, body: Any) -> str:
-    message = "\n".join([method.upper(), path, timestamp, _canonical_json(body)]).encode("utf-8")
+    message = "\n".join(
+        [
+            _sanitize_loop_token(method.upper(), limit=16),
+            str(path or ""),
+            _sanitize_loop_token(timestamp, limit=80),
+            _canonical_json(body),
+        ]
+    ).encode("utf-8")
     return hmac.new(secret.encode("utf-8"), message, hashlib.sha256).hexdigest()
 
 
