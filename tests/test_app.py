@@ -314,6 +314,22 @@ def test_case_detail_renders_projected_records_without_raw_json(tmp_path: Path) 
         assert "raw_outcome" not in body
 
 
+def test_case_detail_only_links_safe_issue_urls(tmp_path: Path) -> None:
+    app, noc = _app(tmp_path)
+    noc.case_rows[0]["issue_url"] = "javascript:alert(1)"
+    with TestClient(app) as client:
+        _login(client)
+        unsafe_body = client.get("/cases/case-1").text
+        assert "javascript:alert(1)" in unsafe_body
+        assert 'href="javascript:alert(1)"' not in unsafe_body
+
+    noc.case_rows[0]["issue_url"] = "https://github.com/AS215932/noc-agent/issues/1"
+    with TestClient(app) as client:
+        _login(client)
+        safe_body = client.get("/cases/case-1").text
+        assert 'href="https://github.com/AS215932/noc-agent/issues/1"' in safe_body
+
+
 def test_cases_default_to_live_scope_with_history_escape_hatch(tmp_path: Path) -> None:
     app, _noc = _app(tmp_path)
     with TestClient(app) as client:

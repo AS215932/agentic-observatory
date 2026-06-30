@@ -21,9 +21,14 @@ detail.summary or {} %} {% set counts = detail.counts or case.counts or {} %}
     {% if case.resolved_at %}
     <dt>Resolved</dt>
     <dd>{{ case.resolved_at }}</dd>
-    {% endif %} {% if case.issue_url %}
+    {% endif %} {% if case.issue_url %} {% set issue_href =
+    case.issue_url|http_url %}
     <dt>Issue</dt>
-    <dd><a href="{{ case.issue_url }}">{{ case.issue_url }}</a></dd>
+    <dd>
+      {% if issue_href %}<a href="{{ issue_href }}" rel="noopener noreferrer"
+        >{{ case.issue_url }}</a
+      >{% else %}{{ case.issue_url }}{% endif %}
+    </dd>
     {% endif %} {% set state = case.operator_state or {} %} {% if
     state.investigation_status %}
     <dt>Investigation</dt>
