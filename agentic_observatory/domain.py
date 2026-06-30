@@ -31,6 +31,15 @@ LOOP_DESCRIPTORS: list[dict[str, Any]] = [
         "capabilities": ["context packs", "knowledge artifacts", "learning ledger"],
     },
     {
+        "loop_id": "hyperliquid-wave-supervisor",
+        "display_name": "Hyperliquid Wave Supervisor",
+        "kind": "other",
+        "status": "idle",
+        "service_name": "hyperliquid-trading-agent.service",
+        "host": "trading",
+        "capabilities": ["engine readiness observation", "LHP handoff rendering", "agent-core traces", "wave-gated verification"],
+    },
+    {
         "loop_id": "soc-loop",
         "display_name": "SOC Loop",
         "kind": "soc",
