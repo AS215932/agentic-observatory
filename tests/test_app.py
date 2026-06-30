@@ -61,7 +61,9 @@ class FakeNOC:
         return {"status": "ok", "path": path}
 
 
-def _app(tmp_path: Path, *, actions: bool = False):
+def _app(tmp_path: Path, *, actions: bool = False, enabled_actions: str | None = None):
+    if enabled_actions is None:
+        enabled_actions = "feedback,ack,suppress,artifact_review,verification_result" if actions else ""
     settings = Settings(
         environment="development",
         database_url=f"sqlite+aiosqlite:///{tmp_path / 'obs.db'}",
@@ -71,6 +73,7 @@ def _app(tmp_path: Path, *, actions: bool = False):
         operator_password_hash="secret",
         actions_enabled=actions,
         read_only=not actions,
+        enabled_actions=enabled_actions,
     )
     app = create_app(settings)
     asyncio.run(app.state.store.init())
@@ -115,3 +118,33 @@ def test_actions_require_csrf_and_are_idempotent(tmp_path: Path) -> None:
         assert second.status_code == 303
         assert len(noc.posts) == 1
         assert noc.posts[0][1]["actor_id"] == "operator"
+
+
+def test_staged_actions_allowlist_gates_each_action(tmp_path: Path) -> None:
+    app, noc = _app(tmp_path, actions=True, enabled_actions="feedback,ack")
+    with TestClient(app) as client:
+        csrf = _login(client)
+        # Allowlisted actions proceed.
+        allowed = client.post(
+            "/actions/cases/case-1/ack",
+            data={"csrf_token": csrf, "idempotency_key": "ack-staged"},
+            follow_redirects=False,
+        )
+        assert allowed.status_code == 303
+        # A known action left off the allowlist is rejected even with a valid CSRF token.
+        denied = client.post(
+            "/actions/cases/case-1/suppress",
+            data={"csrf_token": csrf, "idempotency_key": "suppress-1", "reason": "noise"},
+            follow_redirects=False,
+        )
+        assert denied.status_code == 403
+        assert [path for path, _ in noc.posts] == ["/loop-console/v1/cases/case-1/ack"]
+
+
+def test_case_detail_hides_unallowlisted_action_forms(tmp_path: Path) -> None:
+    app, _noc = _app(tmp_path, actions=True, enabled_actions="feedback")
+    with TestClient(app) as client:
+        _login(client)
+        body = client.get("/cases/case-1").text
+        assert "/actions/cases/case-1/feedback" in body
+        assert "/actions/cases/case-1/ack" not in body

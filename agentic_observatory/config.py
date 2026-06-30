@@ -5,6 +5,14 @@ from functools import lru_cache
 from pydantic import AnyHttpUrl, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Write actions the observatory can proxy to the NOC loop-console API. The
+# operator opts in to each one via OBSERVATORY_ENABLED_ACTIONS, so low-risk
+# actions (feedback, ack) can go live while higher-impact ones (suppress, …)
+# stay gated until a later rollout stage.
+KNOWN_ACTIONS: frozenset[str] = frozenset(
+    {"feedback", "ack", "suppress", "artifact_review", "verification_result"}
+)
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="OBSERVATORY_", env_file=".env", extra="ignore")
@@ -29,11 +37,29 @@ class Settings(BaseSettings):
 
     actions_enabled: bool = False
     read_only: bool = True
+    # Comma-separated allowlist of actions permitted when the write subsystem
+    # is on, e.g. "feedback,ack". Empty means no action is permitted even when
+    # actions_enabled is true (deny-by-default for staged rollout).
+    enabled_actions: str = ""
     request_timeout_seconds: float = 10.0
 
     @property
     def noc_actions_available(self) -> bool:
         return bool(self.noc_base_url and self.noc_loop_console_secret)
+
+    @property
+    def enabled_action_set(self) -> frozenset[str]:
+        names = {token.strip().lower() for token in self.enabled_actions.split(",")}
+        return frozenset(names & KNOWN_ACTIONS)
+
+    def allowed_actions(self) -> frozenset[str]:
+        """Actions currently permitted, after the master write gate."""
+        if self.read_only or not self.actions_enabled:
+            return frozenset()
+        return self.enabled_action_set
+
+    def action_allowed(self, action: str) -> bool:
+        return action in self.allowed_actions()
 
 
 @lru_cache
