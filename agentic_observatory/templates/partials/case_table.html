@@ -4,6 +4,7 @@
       <th>Case</th>
       <th>Status</th>
       <th>Severity</th>
+      <th>Updated</th>
       <th>Summary</th>
     </tr>
   </thead>
@@ -17,11 +18,12 @@
       </td>
       <td>{{ case.status }}</td>
       <td>{{ case.severity }}</td>
+      <td>{{ case.updated_at or case.opened_at or case.resolved_at }}</td>
       <td>{{ case.title or case.summary }}</td>
     </tr>
     {% else %}
     <tr>
-      <td colspan="4">No cases available.</td>
+      <td colspan="5">No cases available.</td>
     </tr>
     {% endfor %}
   </tbody>

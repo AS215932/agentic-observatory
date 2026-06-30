@@ -1,12 +1,25 @@
 {% extends "base.html" %}{% block content %}
 <h1>Knowledge artifacts</h1>
+<nav class="filters" aria-label="Artifact scope">
+  <a class="{% if scope != 'all' %}selected{% endif %}" href="/knowledge"
+    >Live cases</a
+  >
+  <a
+    class="{% if scope == 'all' %}selected{% endif %}"
+    href="/knowledge?scope=all"
+    >All cases</a
+  >
+</nav>
 <table>
   <thead>
     <tr>
       <th>Artifact</th>
       <th>Case</th>
+      <th>Case status</th>
       <th>Type</th>
       <th>Status</th>
+      <th>Created</th>
+      <th>Case updated</th>
       <th>Summary</th>
     </tr>
   </thead>
@@ -21,13 +34,19 @@
       <td>
         <a href="/cases/{{ artifact.case_id }}">{{ artifact.case_id }}</a>
       </td>
+      <td>{{ artifact._case_status }}</td>
       <td>{{ artifact.artifact_type }}</td>
       <td>{{ artifact.review_status or artifact.status }}</td>
+      <td>{{ artifact.created_at }}</td>
+      <td>
+        {{ artifact._case_updated_at or artifact._case_opened_at or
+        artifact._case_resolved_at }}
+      </td>
       <td>{{ artifact.summary }}</td>
     </tr>
     {% else %}
     <tr>
-      <td colspan="5">No artifacts.</td>
+      <td colspan="8">No artifacts.</td>
     </tr>
     {% endfor %}
   </tbody>

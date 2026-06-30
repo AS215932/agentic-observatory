@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import secrets
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -35,6 +36,27 @@ from agentic_observatory.security import (
 )
 
 templates = Jinja2Templates(directory="agentic_observatory/templates")
+
+TERMINAL_CASE_STATUSES = frozenset({"resolved", "closed", "expired", "linked", "split", "merged"})
+LIVE_CASE_STATUSES = (
+    "open",
+    "triaged",
+    "context_requested",
+    "handoff_requested",
+    "handoff_in_progress",
+    "verification_pending",
+    "blocked",
+    "failed",
+    "needs_human",
+    "investigating",
+    "waiting_approval",
+    "recovered_pending",
+    "candidate_event",
+    "active_event",
+    "investigating_event",
+    "monitoring_recovery",
+    "stabilized",
+)
 
 
 def _settings(request: Request) -> Settings:
@@ -75,6 +97,76 @@ def template_context(request: Request, **kwargs: Any) -> dict[str, Any]:
 
 def render(request: Request, template_name: str, **kwargs: Any) -> Response:
     return templates.TemplateResponse(request, template_name, template_context(request, **kwargs))
+
+
+def _case_is_live(case: dict[str, Any]) -> bool:
+    return str(case.get("status") or "").lower() not in TERMINAL_CASE_STATUSES
+
+
+def _timestamp_value(item: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = str(item.get(key) or "")
+        if value:
+            return value
+    return ""
+
+
+def _sort_by_recent(items: list[dict[str, Any]], *keys: str) -> list[dict[str, Any]]:
+    return sorted(items, key=lambda item: _timestamp_value(item, *keys), reverse=True)
+
+
+async def _case_list(request: Request, *, scope: str = "live", status: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+    if status or scope == "all":
+        return await _noc(request).cases(status=status, limit=limit)
+    case_batches = await asyncio.gather(
+        *(_noc(request).cases(status=case_status, limit=limit) for case_status in LIVE_CASE_STATUSES)
+    )
+    cases: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for batch in case_batches:
+        for case in batch:
+            case_id = str(case.get("case_id") or "")
+            if case_id and case_id in seen:
+                continue
+            if _case_is_live(case):
+                cases.append(case)
+                if case_id:
+                    seen.add(case_id)
+    return _sort_by_recent(cases, "updated_at", "opened_at", "resolved_at")[:limit]
+
+
+async def _artifacts_for_cases(request: Request, cases: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    artifacts: list[dict[str, Any]] = []
+    for case in cases:
+        case_id = str(case.get("case_id") or "")
+        if not case_id:
+            continue
+        for artifact in await _noc(request).knowledge_artifacts(case_id):
+            enriched = dict(artifact)
+            enriched["_case_status"] = case.get("status", "")
+            enriched["_case_updated_at"] = case.get("updated_at", "")
+            enriched["_case_opened_at"] = case.get("opened_at", "")
+            enriched["_case_resolved_at"] = case.get("resolved_at", "")
+            artifacts.append(enriched)
+    return _sort_by_recent(artifacts, "created_at", "_case_updated_at", "_case_opened_at")
+
+
+async def _handoffs_for_cases(request: Request, cases: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    handoffs: list[dict[str, Any]] = []
+    for case in cases:
+        case_id = str(case.get("case_id") or "")
+        if case_id:
+            handoffs.extend(await _noc(request).handoffs(case_id))
+    return _sort_by_recent(handoffs, "updated_at", "created_at")
+
+
+async def _verification_objectives_for_cases(request: Request, cases: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    objectives: list[dict[str, Any]] = []
+    for case in cases:
+        case_id = str(case.get("case_id") or "")
+        if case_id:
+            objectives.extend(await _noc(request).verification_objectives(case_id))
+    return _sort_by_recent(objectives, "next_check_at", "last_checked_at")
 
 
 @asynccontextmanager
@@ -158,7 +250,7 @@ def create_app(settings: Settings | None = None, store: ObservatoryStore | None 
     async def index(request: Request) -> Response:
         require_session(request, _settings(request))
         loops = normalize_loop_snapshots(await _collector(request).loops())
-        cases = await _noc(request).cases(limit=10)
+        cases = await _case_list(request, limit=10)
         runs = await _collector(request).runs(limit=10)
         audit = await _store(request).recent_audit(limit=10)
         return render(request, "index.html", loops=loops, cases=cases, runs=runs, audit=audit)
@@ -179,9 +271,10 @@ def create_app(settings: Settings | None = None, store: ObservatoryStore | None 
         return render(request, "loop_detail.html", loop=loop, runs=runs)
 
     @app.get("/cases", response_class=HTMLResponse)
-    async def cases(request: Request, status_filter: str | None = None) -> Response:
+    async def cases(request: Request, status_filter: str | None = None, scope: str = "live") -> Response:
         require_session(request, _settings(request))
-        return render(request, "cases.html", cases=await _noc(request).cases(status=status_filter, limit=100))
+        case_list = await _case_list(request, scope=scope, status=status_filter, limit=100)
+        return render(request, "cases.html", cases=case_list, scope=scope, status_filter=status_filter)
 
     @app.get("/cases/{case_id}", response_class=HTMLResponse)
     async def case_detail(case_id: str, request: Request) -> Response:
@@ -190,9 +283,10 @@ def create_app(settings: Settings | None = None, store: ObservatoryStore | None 
         return render(request, "case_detail.html", detail=detail, case_id=case_id)
 
     @app.get("/handoffs", response_class=HTMLResponse)
-    async def handoffs(request: Request) -> Response:
+    async def handoffs(request: Request, scope: str = "live") -> Response:
         require_session(request, _settings(request))
-        return render(request, "handoffs.html", handoffs=await _noc(request).handoffs())
+        cases = await _case_list(request, scope=scope, limit=100)
+        return render(request, "handoffs.html", handoffs=await _handoffs_for_cases(request, cases), scope=scope)
 
     @app.get("/runs", response_class=HTMLResponse)
     async def runs(request: Request) -> Response:
@@ -211,37 +305,25 @@ def create_app(settings: Settings | None = None, store: ObservatoryStore | None 
         )
 
     @app.get("/knowledge", response_class=HTMLResponse)
-    async def knowledge(request: Request) -> Response:
+    async def knowledge(request: Request, scope: str = "live") -> Response:
         require_session(request, _settings(request))
-        artifacts: list[dict[str, Any]] = []
-        for case in await _noc(request).cases(limit=100):
-            case_id = str(case.get("case_id") or "")
-            if case_id:
-                artifacts.extend(await _noc(request).knowledge_artifacts(case_id))
-        return render(request, "knowledge.html", artifacts=artifacts)
+        cases = await _case_list(request, scope=scope, limit=100)
+        return render(request, "knowledge.html", artifacts=await _artifacts_for_cases(request, cases), scope=scope)
 
     @app.get("/knowledge/artifacts/{artifact_id}", response_class=HTMLResponse)
     async def knowledge_artifact(artifact_id: str, request: Request) -> Response:
         require_session(request, _settings(request))
-        artifacts: list[dict[str, Any]] = []
-        for case in await _noc(request).cases(limit=100):
-            case_id = str(case.get("case_id") or "")
-            if case_id:
-                artifacts.extend(await _noc(request).knowledge_artifacts(case_id))
+        artifacts = await _artifacts_for_cases(request, await _case_list(request, scope="all", limit=100))
         artifact = next((item for item in artifacts if str(item.get("artifact_id")) == artifact_id), None)
         if artifact is None:
             raise HTTPException(status_code=404, detail="Artifact not found")
         return render(request, "artifact_detail.html", artifact=artifact)
 
     @app.get("/verification", response_class=HTMLResponse)
-    async def verification(request: Request) -> Response:
+    async def verification(request: Request, scope: str = "live") -> Response:
         require_session(request, _settings(request))
-        objectives: list[dict[str, Any]] = []
-        for case in await _noc(request).cases(limit=100):
-            case_id = str(case.get("case_id") or "")
-            if case_id:
-                objectives.extend(await _noc(request).verification_objectives(case_id))
-        return render(request, "verification.html", objectives=objectives)
+        cases = await _case_list(request, scope=scope, limit=100)
+        return render(request, "verification.html", objectives=await _verification_objectives_for_cases(request, cases), scope=scope)
 
     @app.get("/changes", response_class=HTMLResponse)
     async def changes(request: Request) -> Response:

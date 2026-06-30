@@ -1,3 +1,18 @@
 {% extends "base.html" %}{% block content %}
 <h1>Cases</h1>
+<nav class="filters" aria-label="Case scope">
+  <a
+    class="{% if not status_filter and scope != 'all' %}selected{% endif %}"
+    href="/cases"
+    >Live</a
+  >
+  <a class="{% if scope == 'all' %}selected{% endif %}" href="/cases?scope=all"
+    >All</a
+  >
+  <a
+    class="{% if status_filter == 'resolved' %}selected{% endif %}"
+    href="/cases?status_filter=resolved"
+    >Resolved</a
+  >
+</nav>
 {% include "partials/case_table.html" %}{% endblock %}
