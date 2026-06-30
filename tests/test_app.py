@@ -16,7 +16,15 @@ class FakeCollector:
         return [{"loop_id": "engineering-loop", "status": "active", "event_count": 3}]
 
     async def runs(self, limit: int = 50) -> list[dict[str, Any]]:
-        return [{"run_id": "run-1", "loop_id": "engineering-loop", "status": "succeeded", "summary": "ran", "change_id": "chg-1"}]
+        return [
+            {
+                "run_id": "run-1",
+                "loop_id": "engineering-loop",
+                "status": "succeeded",
+                "summary": "ran",
+                "change_id": "chg-1",
+            }
+        ]
 
     async def run(self, run_id: str) -> dict[str, Any]:
         return {"run_id": run_id, "status": "succeeded"}
@@ -28,7 +36,10 @@ class FakeCollector:
         return [{"change_id": "chg-1", "event_type": "tool_call"}]
 
     async def topology(self) -> dict[str, Any]:
-        return {"nodes": [{"loop_id": "engineering-loop", "display_name": "Engineering"}], "edges": []}
+        return {
+            "nodes": [{"loop_id": "engineering-loop", "display_name": "Engineering"}],
+            "edges": [],
+        }
 
     async def daily_metrics(self) -> list[dict[str, Any]]:
         return []
@@ -66,13 +77,63 @@ class FakeNOC:
         return rows[:limit]
 
     async def case_detail(self, case_id: str) -> dict[str, Any]:
-        case = next((case for case in self.case_rows if case["case_id"] == case_id), self.case_rows[0])
+        case = next(
+            (case for case in self.case_rows if case["case_id"] == case_id), self.case_rows[0]
+        )
         return {
             "case": dict(case),
+            "counts": {
+                "timeline": 1,
+                "handoffs": 1,
+                "verification_objectives": 1,
+                "knowledge_artifacts": 1,
+                "outcomes": 1,
+            },
+            "timeline_limit": 200,
             "timeline": [{"event_type": "case_opened", "summary": "opened"}],
-            "handoffs": [],
-            "verification_objectives": [],
-            "knowledge_artifacts": [],
+            "handoffs": [
+                {
+                    "handoff_id": f"handoff-{case_id}",
+                    "case_id": case_id,
+                    "target_loop": "engineering",
+                    "status": "requested",
+                    "objective": "fix",
+                    "acceptance_criteria": ["service stays healthy"],
+                    "updated_at": "2026-06-30T10:00:00+00:00",
+                    "payload": {"raw_evidence": "hidden"},
+                }
+            ],
+            "verification_objectives": [
+                {
+                    "objective_id": "obj-1",
+                    "case_id": case_id,
+                    "status": "pending",
+                    "name": "health check",
+                    "consecutive_pass_count": 0,
+                    "required_consecutive_passes": 3,
+                    "payload": {"raw_probe": "hidden"},
+                }
+            ],
+            "knowledge_artifacts": [
+                {
+                    "artifact_id": f"art-{case_id}",
+                    "case_id": case_id,
+                    "artifact_type": "runbook",
+                    "review_status": "pending",
+                    "summary": "candidate",
+                    "created_at": "2026-06-30T10:00:00+00:00",
+                    "payload": {"raw_document": "hidden"},
+                }
+            ],
+            "outcomes": [
+                {
+                    "outcome_id": "outcome-1",
+                    "proposed_action": "review",
+                    "final_score": {"useful": 0.8},
+                    "created_at": "2026-06-30T10:00:00+00:00",
+                    "payload": {"raw_outcome": "hidden"},
+                }
+            ],
         }
 
     async def case_timeline(self, case_id: str) -> list[dict[str, Any]]:
@@ -80,13 +141,33 @@ class FakeNOC:
 
     async def handoffs(self, case_id: str | None = None) -> list[dict[str, Any]]:
         case_id = case_id or "case-1"
-        return [{"handoff_id": f"handoff-{case_id}", "case_id": case_id, "target_loop": "engineering", "status": "requested", "objective": "fix", "created_at": "2026-06-30T10:00:00+00:00"}]
+        return [
+            {
+                "handoff_id": f"handoff-{case_id}",
+                "case_id": case_id,
+                "target_loop": "engineering",
+                "status": "requested",
+                "objective": "fix",
+                "created_at": "2026-06-30T10:00:00+00:00",
+            }
+        ]
 
     async def verification_objectives(self, case_id: str) -> list[dict[str, Any]]:
-        return [{"objective_id": "obj-1", "case_id": case_id, "handoff_id": "handoff-1", "status": "pending", "consecutive_pass_count": 0, "required_consecutive_passes": 3}]
+        return [
+            {
+                "objective_id": "obj-1",
+                "case_id": case_id,
+                "handoff_id": "handoff-1",
+                "status": "pending",
+                "consecutive_pass_count": 0,
+                "required_consecutive_passes": 3,
+            }
+        ]
 
     async def knowledge_artifacts(self, case_id: str) -> list[dict[str, Any]]:
-        created_at = "2026-06-30T10:00:00+00:00" if case_id == "case-1" else "2026-06-01T10:00:00+00:00"
+        created_at = (
+            "2026-06-30T10:00:00+00:00" if case_id == "case-1" else "2026-06-01T10:00:00+00:00"
+        )
         return [
             {
                 "artifact_id": f"art-{case_id}",
@@ -105,7 +186,9 @@ class FakeNOC:
 
 def _app(tmp_path: Path, *, actions: bool = False, enabled_actions: str | None = None):
     if enabled_actions is None:
-        enabled_actions = "feedback,ack,suppress,artifact_review,verification_result" if actions else ""
+        enabled_actions = (
+            "feedback,ack,suppress,artifact_review,verification_result" if actions else ""
+        )
     settings = Settings(
         environment="development",
         database_url=f"sqlite+aiosqlite:///{tmp_path / 'obs.db'}",
@@ -129,7 +212,11 @@ def _login(client: TestClient) -> str:
     response = client.get("/login")
     token = re.search(r'name="csrf_token"\s+value="([a-f0-9]+)"', response.text)
     assert token is not None
-    login = client.post("/login", data={"username": "operator", "password": "secret", "csrf_token": token.group(1)}, follow_redirects=False)
+    login = client.post(
+        "/login",
+        data={"username": "operator", "password": "secret", "csrf_token": token.group(1)},
+        follow_redirects=False,
+    )
     assert login.status_code == 303
     index = client.get("/")
     assert index.status_code == 200
@@ -142,7 +229,19 @@ def test_pages_render_without_javascript(tmp_path: Path) -> None:
     app, _noc = _app(tmp_path)
     with TestClient(app) as client:
         _login(client)
-        for path in ["/", "/loops", "/cases", "/cases/case-1", "/handoffs", "/verification", "/knowledge", "/runs", "/runs/run-1", "/changes", "/analysis"]:
+        for path in [
+            "/",
+            "/loops",
+            "/cases",
+            "/cases/case-1",
+            "/handoffs",
+            "/verification",
+            "/knowledge",
+            "/runs",
+            "/runs/run-1",
+            "/changes",
+            "/analysis",
+        ]:
             response = client.get(path)
             assert response.status_code == 200, path
             assert "<table" in response.text or "North Star" in response.text
@@ -154,8 +253,16 @@ def test_actions_require_csrf_and_are_idempotent(tmp_path: Path) -> None:
         csrf = _login(client)
         denied = client.post("/actions/cases/case-1/ack", data={"idempotency_key": "ack-1"})
         assert denied.status_code == 403
-        first = client.post("/actions/cases/case-1/ack", data={"csrf_token": csrf, "idempotency_key": "ack-1"}, follow_redirects=False)
-        second = client.post("/actions/cases/case-1/ack", data={"csrf_token": csrf, "idempotency_key": "ack-1"}, follow_redirects=False)
+        first = client.post(
+            "/actions/cases/case-1/ack",
+            data={"csrf_token": csrf, "idempotency_key": "ack-1"},
+            follow_redirects=False,
+        )
+        second = client.post(
+            "/actions/cases/case-1/ack",
+            data={"csrf_token": csrf, "idempotency_key": "ack-1"},
+            follow_redirects=False,
+        )
         assert first.status_code == 303
         assert second.status_code == 303
         assert len(noc.posts) == 1
@@ -192,6 +299,37 @@ def test_case_detail_hides_unallowlisted_action_forms(tmp_path: Path) -> None:
         assert "/actions/cases/case-1/ack" not in body
 
 
+def test_case_detail_renders_projected_records_without_raw_json(tmp_path: Path) -> None:
+    app, _noc = _app(tmp_path)
+    with TestClient(app) as client:
+        _login(client)
+        body = client.get("/cases/case-1").text
+        assert "<pre>" not in body
+        assert "handoff-case-1" in body
+        assert "health check" in body
+        assert "candidate" in body
+        assert "raw_evidence" not in body
+        assert "raw_probe" not in body
+        assert "raw_document" not in body
+        assert "raw_outcome" not in body
+
+
+def test_case_detail_only_links_safe_issue_urls(tmp_path: Path) -> None:
+    app, noc = _app(tmp_path)
+    noc.case_rows[0]["issue_url"] = "javascript:alert(1)"
+    with TestClient(app) as client:
+        _login(client)
+        unsafe_body = client.get("/cases/case-1").text
+        assert "javascript:alert(1)" in unsafe_body
+        assert 'href="javascript:alert(1)"' not in unsafe_body
+
+    noc.case_rows[0]["issue_url"] = "https://github.com/AS215932/noc-agent/issues/1"
+    with TestClient(app) as client:
+        _login(client)
+        safe_body = client.get("/cases/case-1").text
+        assert 'href="https://github.com/AS215932/noc-agent/issues/1"' in safe_body
+
+
 def test_cases_default_to_live_scope_with_history_escape_hatch(tmp_path: Path) -> None:
     app, _noc = _app(tmp_path)
     with TestClient(app) as client:
@@ -210,7 +348,9 @@ def test_cases_default_to_live_scope_with_history_escape_hatch(tmp_path: Path) -
         assert "NOC-1" not in resolved
 
 
-def test_live_scope_queries_non_terminal_cases_when_history_fills_first_page(tmp_path: Path) -> None:
+def test_live_scope_queries_non_terminal_cases_when_history_fills_first_page(
+    tmp_path: Path,
+) -> None:
     app, noc = _app(tmp_path)
     noc.case_rows = [
         {
@@ -242,7 +382,9 @@ def test_live_scope_queries_non_terminal_cases_when_history_fills_first_page(tmp
         assert "NOC-OLD-0" not in body
 
 
-def test_knowledge_page_shows_timestamps_and_hides_resolved_case_artifacts_by_default(tmp_path: Path) -> None:
+def test_knowledge_page_shows_timestamps_and_hides_resolved_case_artifacts_by_default(
+    tmp_path: Path,
+) -> None:
     app, _noc = _app(tmp_path)
     with TestClient(app) as client:
         _login(client)

@@ -5,6 +5,7 @@ import secrets
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Any, cast
+from urllib.parse import urlparse
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, Response, status
@@ -57,6 +58,19 @@ LIVE_CASE_STATUSES = (
     "monitoring_recovery",
     "stabilized",
 )
+
+
+def _http_url(value: Any) -> str:
+    url = str(value or "").strip()
+    if not url:
+        return ""
+    parsed = urlparse(url)
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+        return ""
+    return url
+
+
+templates.env.filters["http_url"] = _http_url
 
 
 def _settings(request: Request) -> Settings:
