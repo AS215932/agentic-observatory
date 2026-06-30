@@ -60,12 +60,14 @@ def _github(request: Request) -> GitHubClient:
 def template_context(request: Request, **kwargs: Any) -> dict[str, Any]:
     settings = _settings(request)
     session = current_session(request, settings)
+    allowed_actions = settings.allowed_actions()
     context = {
         "request": request,
         "settings": settings,
         "session": session,
         "csrf_token": session_csrf_token(session, settings) if session else "",
-        "actions_enabled": settings.actions_enabled and not settings.read_only,
+        "enabled_actions": allowed_actions,
+        "actions_enabled": bool(allowed_actions),
     }
     context.update(kwargs)
     return context
@@ -274,8 +276,8 @@ def create_app(settings: Settings | None = None, store: ObservatoryStore | None 
         settings_obj = _settings(request)
         session = require_session(request, settings_obj)
         await validate_session_csrf(request, session, settings_obj)
-        if settings_obj.read_only or not settings_obj.actions_enabled:
-            raise HTTPException(status_code=403, detail="Observatory actions are disabled")
+        if not settings_obj.action_allowed(action):
+            raise HTTPException(status_code=403, detail=f"Observatory action '{action}' is not enabled")
         idempotency_key = str(body.get("idempotency_key") or secrets.token_urlsafe(12))
         scope = f"{action}:{target_type}:{target_id}"
         existing = await _store(request).get_idempotency(scope, idempotency_key)

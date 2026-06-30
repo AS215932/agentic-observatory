@@ -1,7 +1,7 @@
 {% extends "base.html" %}{% block content %}
 <h1>Knowledge artifact {{ artifact.artifact_id }}</h1>
 <section class="card"><pre>{{ artifact|tojson(indent=2) }}</pre></section>
-{% if actions_enabled %}
+{% if "artifact_review" in enabled_actions %}
 <section class="card">
   <h2>Review</h2>
   <form

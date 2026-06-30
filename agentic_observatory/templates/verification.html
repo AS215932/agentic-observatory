@@ -25,7 +25,7 @@
         objective.required_consecutive_passes }}
       </td>
       <td>
-        {% if actions_enabled %}
+        {% if "verification_result" in enabled_actions %}
         <form
           method="post"
           action="/actions/verification-objectives/{{ objective.objective_id }}/result"
