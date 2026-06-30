@@ -1,5 +1,15 @@
 {% extends "base.html" %}{% block content %}
 <h1>Handoffs</h1>
+<nav class="filters" aria-label="Handoff scope">
+  <a class="{% if scope != 'all' %}selected{% endif %}" href="/handoffs"
+    >Live cases</a
+  >
+  <a
+    class="{% if scope == 'all' %}selected{% endif %}"
+    href="/handoffs?scope=all"
+    >All cases</a
+  >
+</nav>
 <table>
   <thead>
     <tr>

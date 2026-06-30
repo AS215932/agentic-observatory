@@ -1,5 +1,15 @@
 {% extends "base.html" %}{% block content %}
 <h1>Verification objectives</h1>
+<nav class="filters" aria-label="Verification scope">
+  <a class="{% if scope != 'all' %}selected{% endif %}" href="/verification"
+    >Live cases</a
+  >
+  <a
+    class="{% if scope == 'all' %}selected{% endif %}"
+    href="/verification?scope=all"
+    >All cases</a
+  >
+</nav>
 <table>
   <thead>
     <tr>

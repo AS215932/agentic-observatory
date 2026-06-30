@@ -37,24 +37,66 @@ class FakeCollector:
 class FakeNOC:
     def __init__(self) -> None:
         self.posts: list[tuple[str, dict[str, Any]]] = []
+        self.case_rows = [
+            {
+                "case_id": "case-1",
+                "case_number": "NOC-1",
+                "status": "open",
+                "severity": "LOW",
+                "title": "BGP",
+                "opened_at": "2026-06-30T08:00:00+00:00",
+                "updated_at": "2026-06-30T09:00:00+00:00",
+            },
+            {
+                "case_id": "case-old",
+                "case_number": "NOC-OLD",
+                "status": "resolved",
+                "severity": "LOW",
+                "title": "Old solved case",
+                "opened_at": "2026-06-01T08:00:00+00:00",
+                "updated_at": "2026-06-01T09:00:00+00:00",
+                "resolved_at": "2026-06-01T09:00:00+00:00",
+            },
+        ]
 
     async def cases(self, *, status: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
-        return [{"case_id": "case-1", "case_number": "NOC-1", "status": status or "open", "severity": "LOW", "title": "BGP"}]
+        rows = [dict(case) for case in self.case_rows]
+        if status:
+            rows = [case for case in rows if case["status"] == status]
+        return rows[:limit]
 
     async def case_detail(self, case_id: str) -> dict[str, Any]:
-        return {"case": {"case_id": case_id, "case_number": "NOC-1", "status": "open", "title": "BGP"}, "timeline": [{"event_type": "case_opened", "summary": "opened"}], "handoffs": [], "verification_objectives": [], "knowledge_artifacts": []}
+        case = next((case for case in self.case_rows if case["case_id"] == case_id), self.case_rows[0])
+        return {
+            "case": dict(case),
+            "timeline": [{"event_type": "case_opened", "summary": "opened"}],
+            "handoffs": [],
+            "verification_objectives": [],
+            "knowledge_artifacts": [],
+        }
 
     async def case_timeline(self, case_id: str) -> list[dict[str, Any]]:
         return [{"event_type": "case_opened", "summary": case_id}]
 
     async def handoffs(self, case_id: str | None = None) -> list[dict[str, Any]]:
-        return [{"handoff_id": "handoff-1", "case_id": "case-1", "target_loop": "engineering", "status": "requested", "objective": "fix"}]
+        case_id = case_id or "case-1"
+        return [{"handoff_id": f"handoff-{case_id}", "case_id": case_id, "target_loop": "engineering", "status": "requested", "objective": "fix", "created_at": "2026-06-30T10:00:00+00:00"}]
 
     async def verification_objectives(self, case_id: str) -> list[dict[str, Any]]:
         return [{"objective_id": "obj-1", "case_id": case_id, "handoff_id": "handoff-1", "status": "pending", "consecutive_pass_count": 0, "required_consecutive_passes": 3}]
 
     async def knowledge_artifacts(self, case_id: str) -> list[dict[str, Any]]:
-        return [{"artifact_id": "art-1", "case_id": case_id, "artifact_type": "runbook", "review_status": "pending", "summary": "candidate"}]
+        created_at = "2026-06-30T10:00:00+00:00" if case_id == "case-1" else "2026-06-01T10:00:00+00:00"
+        return [
+            {
+                "artifact_id": f"art-{case_id}",
+                "case_id": case_id,
+                "artifact_type": "runbook",
+                "review_status": "pending",
+                "summary": "candidate",
+                "created_at": created_at,
+            }
+        ]
 
     async def post_action(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
         self.posts.append((path, body))
@@ -148,3 +190,83 @@ def test_case_detail_hides_unallowlisted_action_forms(tmp_path: Path) -> None:
         body = client.get("/cases/case-1").text
         assert "/actions/cases/case-1/feedback" in body
         assert "/actions/cases/case-1/ack" not in body
+
+
+def test_cases_default_to_live_scope_with_history_escape_hatch(tmp_path: Path) -> None:
+    app, _noc = _app(tmp_path)
+    with TestClient(app) as client:
+        _login(client)
+        live = client.get("/cases").text
+        assert "NOC-1" in live
+        assert "NOC-OLD" not in live
+        assert "2026-06-30T09:00:00+00:00" in live
+
+        history = client.get("/cases?scope=all").text
+        assert "NOC-1" in history
+        assert "NOC-OLD" in history
+
+        resolved = client.get("/cases?status_filter=resolved").text
+        assert "NOC-OLD" in resolved
+        assert "NOC-1" not in resolved
+
+
+def test_live_scope_queries_non_terminal_cases_when_history_fills_first_page(tmp_path: Path) -> None:
+    app, noc = _app(tmp_path)
+    noc.case_rows = [
+        {
+            "case_id": f"case-old-{index}",
+            "case_number": f"NOC-OLD-{index}",
+            "status": "resolved",
+            "severity": "LOW",
+            "title": "Old solved case",
+            "opened_at": "2026-06-01T08:00:00+00:00",
+            "updated_at": "2026-06-01T09:00:00+00:00",
+            "resolved_at": "2026-06-01T09:00:00+00:00",
+        }
+        for index in range(101)
+    ] + [
+        {
+            "case_id": "case-live",
+            "case_number": "NOC-LIVE",
+            "status": "open",
+            "severity": "LOW",
+            "title": "Current case",
+            "opened_at": "2026-06-30T08:00:00+00:00",
+            "updated_at": "2026-06-30T09:00:00+00:00",
+        }
+    ]
+    with TestClient(app) as client:
+        _login(client)
+        body = client.get("/cases").text
+        assert "NOC-LIVE" in body
+        assert "NOC-OLD-0" not in body
+
+
+def test_knowledge_page_shows_timestamps_and_hides_resolved_case_artifacts_by_default(tmp_path: Path) -> None:
+    app, _noc = _app(tmp_path)
+    with TestClient(app) as client:
+        _login(client)
+        live = client.get("/knowledge").text
+        assert "art-case-1" in live
+        assert "art-case-old" not in live
+        assert "2026-06-30T10:00:00+00:00" in live
+        assert "2026-06-30T09:00:00+00:00" in live
+
+        history = client.get("/knowledge?scope=all").text
+        assert "art-case-1" in history
+        assert "art-case-old" in history
+
+
+def test_aggregate_pages_default_to_live_cases(tmp_path: Path) -> None:
+    app, _noc = _app(tmp_path)
+    with TestClient(app) as client:
+        _login(client)
+        handoffs = client.get("/handoffs").text
+        assert "handoff-case-1" in handoffs
+        assert "handoff-case-old" not in handoffs
+        assert "handoff-case-old" in client.get("/handoffs?scope=all").text
+
+        verification = client.get("/verification").text
+        assert "case-1" in verification
+        assert "case-old" not in verification
+        assert "case-old" in client.get("/verification?scope=all").text

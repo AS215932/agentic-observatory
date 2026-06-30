@@ -9,6 +9,14 @@
     <dd>{{ case.severity }}</dd>
     <dt>Resource</dt>
     <dd>{{ case.resource_id }}</dd>
+    <dt>Opened</dt>
+    <dd>{{ case.opened_at }}</dd>
+    <dt>Updated</dt>
+    <dd>{{ case.updated_at }}</dd>
+    {% if case.resolved_at %}
+    <dt>Resolved</dt>
+    <dd>{{ case.resolved_at }}</dd>
+    {% endif %}
   </dl>
 </section>
 {% if "feedback" in enabled_actions or "ack" in enabled_actions %}

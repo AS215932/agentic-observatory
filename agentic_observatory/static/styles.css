@@ -35,6 +35,20 @@ nav {
   flex: 1;
   flex-wrap: wrap;
 }
+.filters {
+  margin: 0 0 1rem;
+  flex: initial;
+}
+.filters a {
+  border: 1px solid #36507c;
+  border-radius: 8px;
+  padding: 0.4rem 0.6rem;
+  text-decoration: none;
+}
+.filters a.selected {
+  background: #205986;
+  color: var(--text);
+}
 a {
   color: var(--accent);
 }
