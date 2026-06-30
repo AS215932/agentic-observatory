@@ -1,5 +1,6 @@
-{% extends "base.html" %}{% block content %} {% set case = detail.case or {} %}
-<h1>Case {{ case.case_number or case_id }}</h1>
+{% extends "base.html" %}{% block content %} {% set case = detail.case or
+detail.summary or {} %} {% set counts = detail.counts or case.counts or {} %}
+<h1>Case {{ case.case_number or case.case_id or case_id }}</h1>
 <section class="card">
   <p>{{ case.title or case.summary }}</p>
   <dl>
@@ -9,6 +10,10 @@
     <dd>{{ case.severity }}</dd>
     <dt>Resource</dt>
     <dd>{{ case.resource_id }}</dd>
+    {% if case.origin %}
+    <dt>Origin</dt>
+    <dd>{{ case.origin }}</dd>
+    {% endif %}
     <dt>Opened</dt>
     <dd>{{ case.opened_at }}</dd>
     <dt>Updated</dt>
@@ -16,6 +21,22 @@
     {% if case.resolved_at %}
     <dt>Resolved</dt>
     <dd>{{ case.resolved_at }}</dd>
+    {% endif %} {% if case.issue_url %}
+    <dt>Issue</dt>
+    <dd><a href="{{ case.issue_url }}">{{ case.issue_url }}</a></dd>
+    {% endif %} {% set state = case.operator_state or {} %} {% if
+    state.investigation_status %}
+    <dt>Investigation</dt>
+    <dd>{{ state.investigation_status }}</dd>
+    {% endif %} {% if state.handoff_status %}
+    <dt>Handoff</dt>
+    <dd>{{ state.handoff_status }}</dd>
+    {% endif %} {% if state.acknowledged_at %}
+    <dt>Acknowledged</dt>
+    <dd>{{ state.acknowledged_by }} {{ state.acknowledged_at }}</dd>
+    {% endif %} {% if state.suppressed_until %}
+    <dt>Suppressed</dt>
+    <dd>{{ state.suppressed_until }} {{ state.suppression_reason }}</dd>
     {% endif %}
   </dl>
 </section>
@@ -44,10 +65,10 @@
 {% endif %}
 <section class="card">
   <h2>Timeline</h2>
-  <div
-    id="case-timeline-island"
-    data-src="/api/cases/{{ case_id }}/timeline"
-  ></div>
+  {% if counts.timeline and detail.timeline_limit and counts.timeline >
+  detail.timeline|length %}
+  <p>{{ detail.timeline|length }} of {{ counts.timeline }} recent items</p>
+  {% endif %}
   <table>
     <thead>
       <tr>
@@ -60,10 +81,10 @@
     <tbody>
       {% for item in detail.timeline %}
       <tr>
-        <td>{{ item.occurred_at or item.created_at }}</td>
+        <td>{{ item.received_at or item.occurred_at or item.created_at }}</td>
         <td>{{ item.event_type or item.item_type }}</td>
-        <td>{{ item.actor_id or item.actor }}</td>
-        <td>{{ item.summary or item.payload }}</td>
+        <td>{{ item.operator or item.actor_id or item.actor }}</td>
+        <td>{{ item.summary }}</td>
       </tr>
       {% else %}
       <tr>
@@ -73,18 +94,134 @@
     </tbody>
   </table>
 </section>
-<section class="grid">
-  <article class="card">
-    <h2>Handoffs</h2>
-    <pre>{{ detail.handoffs|tojson(indent=2) }}</pre>
-  </article>
-  <article class="card">
-    <h2>Verification</h2>
-    <pre>{{ detail.verification_objectives|tojson(indent=2) }}</pre>
-  </article>
-  <article class="card">
-    <h2>Knowledge</h2>
-    <pre>{{ detail.knowledge_artifacts|tojson(indent=2) }}</pre>
-  </article>
+<section class="card">
+  <h2>Handoffs</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Handoff</th>
+        <th>Target</th>
+        <th>Status</th>
+        <th>Objective</th>
+        <th>Updated</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for handoff in detail.handoffs %}
+      <tr>
+        <td>{{ handoff.handoff_id }}</td>
+        <td>{{ handoff.target_loop }}</td>
+        <td>{{ handoff.status }}</td>
+        <td>
+          {{ handoff.objective }} {% if handoff.acceptance_criteria %}<br /><small
+            >{{ handoff.acceptance_criteria|join("; ") }}</small
+          >{% endif %}
+        </td>
+        <td>{{ handoff.updated_at or handoff.created_at }}</td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="5">No handoffs.</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+<section class="card">
+  <h2>Verification</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Objective</th>
+        <th>Status</th>
+        <th>Passes</th>
+        <th>Check</th>
+        <th>Evidence</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for objective in detail.verification_objectives %}
+      <tr>
+        <td>
+          {{ objective.name or objective.objective_key or objective.objective_id
+          }} {% if objective.description %}<br /><small
+            >{{ objective.description }}</small
+          >{% endif %}
+        </td>
+        <td>{{ objective.status }}</td>
+        <td>
+          {{ objective.consecutive_pass_count }}/{{
+          objective.required_consecutive_passes }}
+        </td>
+        <td>{{ objective.last_checked_at or objective.next_check_at }}</td>
+        <td>{{ objective.failure_reason or objective.evidence_ref }}</td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="5">No verification objectives.</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+<section class="card">
+  <h2>Knowledge</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Artifact</th>
+        <th>Type</th>
+        <th>Status</th>
+        <th>Created</th>
+        <th>Summary</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for artifact in detail.knowledge_artifacts %}
+      <tr>
+        <td>
+          <a href="/knowledge/artifacts/{{ artifact.artifact_id }}"
+            >{{ artifact.artifact_id }}</a
+          >
+        </td>
+        <td>{{ artifact.artifact_type }}</td>
+        <td>{{ artifact.review_status or artifact.status }}</td>
+        <td>{{ artifact.created_at }}</td>
+        <td>{{ artifact.summary }}</td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="5">No knowledge artifacts.</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+<section class="card">
+  <h2>Outcomes</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Outcome</th>
+        <th>Action</th>
+        <th>Score</th>
+        <th>Created</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for outcome in detail.outcomes %}
+      <tr>
+        <td>{{ outcome.outcome_id }}</td>
+        <td>{{ outcome.action_taken or outcome.proposed_action }}</td>
+        <td>{{ outcome.final_score }}</td>
+        <td>{{ outcome.created_at }}</td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="4">No outcomes.</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
 </section>
 {% endblock %}
