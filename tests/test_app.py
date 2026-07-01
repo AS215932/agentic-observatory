@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from fastapi.testclient import TestClient
 
-from agentic_observatory.app import create_app
+from agentic_observatory.app import _case_is_live, create_app
 from agentic_observatory.config import Settings
 
 
@@ -184,7 +185,13 @@ class FakeNOC:
         return {"status": "ok", "path": path}
 
 
-def _app(tmp_path: Path, *, actions: bool = False, enabled_actions: str | None = None):
+def _app(
+    tmp_path: Path,
+    *,
+    actions: bool = False,
+    enabled_actions: str | None = None,
+    live_case_max_age_hours: float = 24 * 365 * 10,
+):
     if enabled_actions is None:
         enabled_actions = (
             "feedback,ack,suppress,artifact_review,verification_result" if actions else ""
@@ -199,6 +206,7 @@ def _app(tmp_path: Path, *, actions: bool = False, enabled_actions: str | None =
         actions_enabled=actions,
         read_only=not actions,
         enabled_actions=enabled_actions,
+        live_case_max_age_hours=live_case_max_age_hours,
     )
     app = create_app(settings)
     asyncio.run(app.state.store.init())
@@ -380,6 +388,58 @@ def test_live_scope_queries_non_terminal_cases_when_history_fills_first_page(
         body = client.get("/cases").text
         assert "NOC-LIVE" in body
         assert "NOC-OLD-0" not in body
+
+
+def test_live_scope_hides_stale_non_action_cases(tmp_path: Path) -> None:
+    app, noc = _app(tmp_path, live_case_max_age_hours=24)
+    noc.case_rows = [
+        {
+            "case_id": "case-stale",
+            "case_number": "NOC-STALE",
+            "status": "investigating",
+            "severity": "LOW",
+            "title": "Stale solved case",
+            "opened_at": "2020-01-01T00:00:00+00:00",
+            "updated_at": "2020-01-01T00:00:00+00:00",
+        },
+        {
+            "case_id": "case-action",
+            "case_number": "NOC-ACTION",
+            "status": "handoff_requested",
+            "severity": "HIGH",
+            "title": "Needs operator action",
+            "opened_at": "2020-01-01T00:00:00+00:00",
+            "updated_at": "2020-01-01T00:00:00+00:00",
+        },
+    ]
+    with TestClient(app) as client:
+        _login(client)
+        live = client.get("/cases").text
+        assert "NOC-STALE" not in live
+        assert "NOC-ACTION" in live
+
+        history = client.get("/cases?scope=all").text
+        assert "NOC-STALE" in history
+        assert "NOC-ACTION" in history
+
+
+def test_case_live_freshness_uses_latest_case_timestamp() -> None:
+    now = datetime(2026, 7, 1, tzinfo=UTC)
+    assert _case_is_live(
+        {"status": "investigating", "updated_at": "2026-06-30T12:00:00+00:00"},
+        now=now,
+        max_age_hours=24,
+    )
+    assert not _case_is_live(
+        {"status": "investigating", "updated_at": "2026-06-29T12:00:00+00:00"},
+        now=now,
+        max_age_hours=24,
+    )
+    assert _case_is_live(
+        {"status": "handoff_requested", "updated_at": "2026-06-29T12:00:00+00:00"},
+        now=now,
+        max_age_hours=24,
+    )
 
 
 def test_knowledge_page_shows_timestamps_and_hides_resolved_case_artifacts_by_default(

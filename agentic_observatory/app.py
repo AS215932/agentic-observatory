@@ -4,6 +4,7 @@ import asyncio
 import secrets
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from urllib.parse import urlparse
 
@@ -39,6 +40,16 @@ from agentic_observatory.security import (
 templates = Jinja2Templates(directory="agentic_observatory/templates")
 
 TERMINAL_CASE_STATUSES = frozenset({"resolved", "closed", "expired", "linked", "split", "merged"})
+ACTIONABLE_CASE_STATUSES = frozenset(
+    {
+        "blocked",
+        "failed",
+        "handoff_in_progress",
+        "handoff_requested",
+        "needs_human",
+        "waiting_approval",
+    }
+)
 LIVE_CASE_STATUSES = (
     "open",
     "triaged",
@@ -113,8 +124,37 @@ def render(request: Request, template_name: str, **kwargs: Any) -> Response:
     return templates.TemplateResponse(request, template_name, template_context(request, **kwargs))
 
 
-def _case_is_live(case: dict[str, Any]) -> bool:
-    return str(case.get("status") or "").lower() not in TERMINAL_CASE_STATUSES
+def _parse_timestamp(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _case_is_recent(case: dict[str, Any], *, now: datetime, max_age_hours: float) -> bool:
+    if max_age_hours <= 0:
+        return True
+    timestamp = _parse_timestamp(_timestamp_value(case, "updated_at", "opened_at", "resolved_at"))
+    if timestamp is None:
+        return True
+    return now - timestamp <= timedelta(hours=max_age_hours)
+
+
+def _case_is_live(case: dict[str, Any], *, now: datetime, max_age_hours: float) -> bool:
+    status = str(case.get("status") or "").lower()
+    if status in TERMINAL_CASE_STATUSES:
+        return False
+    if status in ACTIONABLE_CASE_STATUSES:
+        return True
+    return _case_is_recent(case, now=now, max_age_hours=max_age_hours)
 
 
 def _timestamp_value(item: dict[str, Any], *keys: str) -> str:
@@ -132,6 +172,8 @@ def _sort_by_recent(items: list[dict[str, Any]], *keys: str) -> list[dict[str, A
 async def _case_list(request: Request, *, scope: str = "live", status: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
     if status or scope == "all":
         return await _noc(request).cases(status=status, limit=limit)
+    settings = _settings(request)
+    now = datetime.now(UTC)
     case_batches = await asyncio.gather(
         *(_noc(request).cases(status=case_status, limit=limit) for case_status in LIVE_CASE_STATUSES)
     )
@@ -142,7 +184,7 @@ async def _case_list(request: Request, *, scope: str = "live", status: str | Non
             case_id = str(case.get("case_id") or "")
             if case_id and case_id in seen:
                 continue
-            if _case_is_live(case):
+            if _case_is_live(case, now=now, max_age_hours=settings.live_case_max_age_hours):
                 cases.append(case)
                 if case_id:
                     seen.add(case_id)
