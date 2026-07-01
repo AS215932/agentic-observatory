@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     # actions_enabled is true (deny-by-default for staged rollout).
     enabled_actions: str = ""
     request_timeout_seconds: float = 10.0
+    live_case_max_age_hours: float = 24.0
 
     @property
     def noc_actions_available(self) -> bool:
