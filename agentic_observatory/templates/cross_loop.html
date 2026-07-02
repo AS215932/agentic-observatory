@@ -1,0 +1,94 @@
+{% extends "base.html" %}{% block content %}
+<h1>Cross-loop timelines</h1>
+<form class="filters" method="get" action="/cross-loop">
+  <label>
+    Fingerprint
+    <input name="fingerprint" value="{{ fingerprint }}" />
+  </label>
+  <label>
+    Limit
+    <input name="limit" type="number" min="1" max="500" value="{{ limit }}" />
+  </label>
+  <button>Filter</button>
+  {% if fingerprint %}<a href="/cross-loop">Clear</a>{% endif %}
+</form>
+{% if not memory_status.available %}
+<p class="banner">
+  Knowledge decision memory unavailable: {{ memory_status.reason }} {{
+  memory_status.path }}
+</p>
+{% endif %}
+<table>
+  <thead>
+    <tr>
+      <th>Fingerprint</th>
+      <th>Loops</th>
+      <th>Owner</th>
+      <th>Speak</th>
+      <th>Signals</th>
+      <th>Cases</th>
+      <th>Updated</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for timeline in timelines %}
+    <tr>
+      <td>
+        <a href="/cross-loop?fingerprint={{ timeline.fingerprint }}"
+          >{{ timeline.fingerprint }}</a
+        >
+      </td>
+      <td>{{ timeline.loops|join(', ') }}</td>
+      <td>{{ timeline.owner_loop or 'none' }}</td>
+      <td>{{ timeline.speak_loop or 'none' }} / {{ timeline.selected_action }}</td>
+      <td>
+        {% if timeline.duplicate_speech %}duplicate speech{% endif %}
+        {% if timeline.disagreement %} disagreement{% endif %}
+        {% if timeline.silent_loops %} silent: {{ timeline.silent_loops|join(', ') }}{% endif %}
+        {% if timeline.missing_evidence_loops %} missing evidence: {{
+        timeline.missing_evidence_loops|join(', ') }}{% endif %}
+      </td>
+      <td>{{ timeline.case_ids|join(', ') }}</td>
+      <td>{{ timeline.updated_at }}</td>
+    </tr>
+    {% else %}
+    <tr>
+      <td colspan="7">No loop decision envelopes.</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% for timeline in timelines %}
+<h2>{{ timeline.fingerprint }}</h2>
+<table>
+  <thead>
+    <tr>
+      <th>Created</th>
+      <th>Loop</th>
+      <th>Decision</th>
+      <th>Case</th>
+      <th>Evidence</th>
+      <th>Context</th>
+      <th>Governance</th>
+      <th>Proposed action</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for record in timeline.records %}
+    <tr>
+      <td>{{ record.created_at }}</td>
+      <td>{{ record.loop }}</td>
+      <td>{{ record.decision }}</td>
+      <td>{{ record.case_id or record.meta_case_id }}</td>
+      <td>{{ record.evidence_count }}</td>
+      <td>{{ record.context_count }}</td>
+      <td>
+        {{ record.sensitivity_class }} / {{ record.approval_tier }}{% if
+        record.never_learn %} / never learn{% endif %}
+      </td>
+      <td>{{ record.proposed_action }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endfor %} {% endblock %}

@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     noc_base_url: AnyHttpUrl | None = None
     noc_loop_console_secret: str = ""
     github_token: str = ""
+    knowledge_export_db_path: str = "/opt/knowledge/exports/knowledge.sqlite"
 
     actions_enabled: bool = False
     read_only: bool = True
