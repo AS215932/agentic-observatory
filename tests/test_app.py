@@ -322,6 +322,28 @@ def test_case_detail_renders_projected_records_without_raw_json(tmp_path: Path) 
         assert "raw_outcome" not in body
 
 
+def test_insight_contract_accepts_all_observatory_display_actions() -> None:
+    from agent_core.contracts import InsightDecisionRecord
+
+    for action in ["notify", "question", "draft", "stay_silent"]:
+        record = InsightDecisionRecord.model_validate(
+                {
+                    "insight_id": f"ins_observatory_{action}",
+                    "loop": "noc",
+                "fingerprint": f"observatory-{action}",
+                "sampling_class": "surfaced",
+                "candidate_type": "display_fixture",
+                "candidate_source": "agentic_observatory:test",
+                "support_facts": ["contract action renders as displayable state"],
+                "evidence_refs": [{"kind": "fixture", "ref": f"observatory:{action}"}],
+                "action_selected": action,
+                "why_now": "Fixture validates Observatory can depend on the released action space.",
+                "policy_version": "observatory-insight.fixture",
+            }
+        )
+        assert record.action_selected == action
+
+
 def test_case_detail_only_links_safe_issue_urls(tmp_path: Path) -> None:
     app, noc = _app(tmp_path)
     noc.case_rows[0]["issue_url"] = "javascript:alert(1)"
