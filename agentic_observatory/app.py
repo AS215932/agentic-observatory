@@ -23,6 +23,7 @@ from agentic_observatory.domain import (
     extract_change_keys,
     normalize_loop_snapshots,
 )
+from agentic_observatory.loop_memory import KnowledgeLoopMemory
 from agentic_observatory.security import (
     CSRF_COOKIE,
     clear_session_cookie,
@@ -102,6 +103,10 @@ def _noc(request: Request) -> NOCClient:
 
 def _github(request: Request) -> GitHubClient:
     return cast(GitHubClient, request.app.state.github)
+
+
+def _knowledge_memory(request: Request) -> KnowledgeLoopMemory:
+    return cast(KnowledgeLoopMemory, request.app.state.knowledge_memory)
 
 
 def template_context(request: Request, **kwargs: Any) -> dict[str, Any]:
@@ -235,6 +240,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.collector = CollectorClient(settings.collector_base_url, timeout=settings.request_timeout_seconds)
     app.state.noc = NOCClient(settings.noc_base_url, settings.noc_loop_console_secret, timeout=settings.request_timeout_seconds)
     app.state.github = GitHubClient(settings.github_token, timeout=settings.request_timeout_seconds)
+    app.state.knowledge_memory = KnowledgeLoopMemory(settings.knowledge_export_db_path)
     try:
         yield
     finally:
@@ -249,6 +255,7 @@ def create_app(settings: Settings | None = None, store: ObservatoryStore | None 
         app.state.collector = CollectorClient(settings.collector_base_url, timeout=settings.request_timeout_seconds)
         app.state.noc = NOCClient(settings.noc_base_url, settings.noc_loop_console_secret, timeout=settings.request_timeout_seconds)
         app.state.github = GitHubClient(settings.github_token, timeout=settings.request_timeout_seconds)
+        app.state.knowledge_memory = KnowledgeLoopMemory(settings.knowledge_export_db_path)
     app.mount("/static", StaticFiles(directory="agentic_observatory/static"), name="static")
 
     @app.middleware("http")
@@ -375,6 +382,19 @@ def create_app(settings: Settings | None = None, store: ObservatoryStore | None 
             raise HTTPException(status_code=404, detail="Artifact not found")
         return render(request, "artifact_detail.html", artifact=artifact)
 
+    @app.get("/cross-loop", response_class=HTMLResponse)
+    async def cross_loop(request: Request, fingerprint: str | None = None, limit: int = 100) -> Response:
+        require_session(request, _settings(request))
+        memory = _knowledge_memory(request)
+        return render(
+            request,
+            "cross_loop.html",
+            memory_status=memory.status(),
+            timelines=memory.timelines(fingerprint=fingerprint, limit=limit),
+            fingerprint=fingerprint or "",
+            limit=limit,
+        )
+
     @app.get("/verification", response_class=HTMLResponse)
     async def verification(request: Request, scope: str = "live") -> Response:
         require_session(request, _settings(request))
@@ -490,6 +510,18 @@ def create_app(settings: Settings | None = None, store: ObservatoryStore | None 
     async def api_change_impact(change_key: str, request: Request) -> JSONResponse:
         require_session(request, _settings(request))
         return JSONResponse(report_to_dict(build_change_impact_report(change_key)))
+
+    @app.get("/api/cross-loop/timelines")
+    async def api_cross_loop_timelines(request: Request, fingerprint: str | None = None, limit: int = 100) -> JSONResponse:
+        require_session(request, _settings(request))
+        memory = _knowledge_memory(request)
+        return JSONResponse(
+            {
+                "status": memory.status(),
+                "fingerprint": fingerprint or "",
+                "timelines": memory.timelines(fingerprint=fingerprint, limit=limit),
+            }
+        )
 
     return app
 

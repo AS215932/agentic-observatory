@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
+import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from agentic_observatory.app import _case_is_live, create_app
@@ -191,7 +194,8 @@ def _app(
     actions: bool = False,
     enabled_actions: str | None = None,
     live_case_max_age_hours: float = 24 * 365 * 10,
-):
+    knowledge_export_db_path: str | None = None,
+) -> tuple[FastAPI, FakeNOC]:
     if enabled_actions is None:
         enabled_actions = (
             "feedback,ack,suppress,artifact_review,verification_result" if actions else ""
@@ -207,6 +211,7 @@ def _app(
         read_only=not actions,
         enabled_actions=enabled_actions,
         live_case_max_age_hours=live_case_max_age_hours,
+        knowledge_export_db_path=knowledge_export_db_path or str(tmp_path / "missing-knowledge.sqlite"),
     )
     app = create_app(settings)
     asyncio.run(app.state.store.init())
@@ -245,6 +250,7 @@ def test_pages_render_without_javascript(tmp_path: Path) -> None:
             "/handoffs",
             "/verification",
             "/knowledge",
+            "/cross-loop",
             "/runs",
             "/runs/run-1",
             "/changes",
@@ -323,7 +329,7 @@ def test_case_detail_renders_projected_records_without_raw_json(tmp_path: Path) 
 
 
 def test_insight_contract_accepts_all_observatory_display_actions() -> None:
-    from agent_core.contracts import InsightDecisionRecord
+    from agent_core.contracts import InsightDecisionRecord  # type: ignore[import-untyped]
 
     for action in ["notify", "question", "draft", "stay_silent"]:
         record = InsightDecisionRecord.model_validate(
@@ -494,3 +500,110 @@ def test_aggregate_pages_default_to_live_cases(tmp_path: Path) -> None:
         assert "case-1" in verification
         assert "case-old" not in verification
         assert "case-old" in client.get("/verification?scope=all").text
+
+
+def test_cross_loop_timelines_group_knowledge_decision_memory(tmp_path: Path) -> None:
+    db_path = tmp_path / "knowledge.sqlite"
+    _write_loop_decision_db(db_path)
+    app, _noc = _app(tmp_path, knowledge_export_db_path=str(db_path))
+    with TestClient(app) as client:
+        _login(client)
+        body = client.get("/cross-loop").text
+        assert "shared-fp" in body
+        assert "soc" in body
+        assert "stay_silent" in body
+        assert "missing evidence: soc" in body
+
+        response = client.get("/api/cross-loop/timelines?fingerprint=shared-fp")
+        assert response.status_code == 200
+        payload = response.json()
+        timeline = payload["timelines"][0]
+        assert timeline["fingerprint"] == "shared-fp"
+        assert timeline["owner_loop"] == "soc"
+        assert timeline["speak_loop"] is None
+        assert timeline["silent_loops"] == ["soc"]
+        assert timeline["missing_evidence_loops"] == ["soc"]
+        assert timeline["shadow_mode"] is True
+        assert timeline["suppression_applied"] is False
+
+
+def _write_loop_decision_db(path: Path) -> None:
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE loop_decision_envelopes (
+              envelope_id TEXT PRIMARY KEY,
+              loop TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              fingerprint TEXT NOT NULL,
+              decision TEXT NOT NULL,
+              insight_id TEXT,
+              case_id TEXT,
+              meta_case_id TEXT,
+              evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+              proposed_action_json TEXT NOT NULL DEFAULT '{}',
+              human_outcome_json TEXT NOT NULL DEFAULT '{}',
+              governance_json TEXT NOT NULL DEFAULT '{}',
+              body_json TEXT NOT NULL
+            )
+            """
+        )
+        rows: list[dict[str, Any]] = [
+            {
+                "envelope_id": "env-noc",
+                "loop": "noc",
+                "created_at": "2026-07-02T10:00:00+00:00",
+                "fingerprint": "shared-fp",
+                "decision": "notify",
+                "case_id": "case-noc",
+                "evidence_refs_json": [{"kind": "fixture", "ref": "noc:evidence"}],
+                "proposed_action_json": {"type": "ticket", "summary": "Open NOC case"},
+                "governance_json": {"approval_tier": "operator", "sensitivity_class": "internal"},
+                "body_json": {
+                    "input_event": {"event_type": "alert", "source": "noc:test"},
+                    "retrieved_context": [{"kind": "fixture", "ref": "knowledge:noc"}],
+                },
+            },
+            {
+                "envelope_id": "env-soc",
+                "loop": "soc",
+                "created_at": "2026-07-02T10:01:00+00:00",
+                "fingerprint": "shared-fp",
+                "decision": "stay_silent",
+                "case_id": "case-soc",
+                "evidence_refs_json": [],
+                "proposed_action_json": {"type": "control_drift", "summary": "Security posture drift"},
+                "governance_json": {"approval_tier": "senior", "sensitivity_class": "sensitive"},
+                "body_json": {
+                    "input_event": {"event_type": "control_drift", "source": "soc:test"},
+                    "retrieved_context": [],
+                },
+            },
+        ]
+        for row in rows:
+            conn.execute(
+                """
+                INSERT INTO loop_decision_envelopes (
+                    envelope_id, loop, created_at, fingerprint, decision, insight_id,
+                    case_id, meta_case_id, evidence_refs_json, proposed_action_json,
+                    human_outcome_json, governance_json, body_json
+                )
+                VALUES (?, ?, ?, ?, ?, NULL, ?, NULL, ?, ?, '{}', ?, ?)
+                """,
+                (
+                    row["envelope_id"],
+                    row["loop"],
+                    row["created_at"],
+                    row["fingerprint"],
+                    row["decision"],
+                    row["case_id"],
+                    json.dumps(row["evidence_refs_json"]),
+                    json.dumps(row["proposed_action_json"]),
+                    json.dumps(row["governance_json"]),
+                    json.dumps(row["body_json"]),
+                ),
+            )
+        conn.commit()
+    finally:
+        conn.close()
