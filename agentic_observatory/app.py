@@ -381,6 +381,33 @@ def create_app(settings: Settings | None = None, store: ObservatoryStore | None 
         cases = await _case_list(request, scope=scope, limit=100)
         return render(request, "verification.html", objectives=await _verification_objectives_for_cases(request, cases), scope=scope)
 
+    @app.get("/insights", response_class=HTMLResponse)
+    async def insights(
+        request: Request,
+        loop: str = "noc",
+        action: str | None = None,
+        sampling_class: str | None = None,
+    ) -> Response:
+        require_session(request, _settings(request))
+        metrics, rows = await asyncio.gather(
+            _noc(request).insight_metrics(loop=loop),
+            _noc(request).insights(loop=loop, action=action, sampling_class=sampling_class, limit=100),
+        )
+        return render(
+            request,
+            "insights.html",
+            insights=rows,
+            metrics=metrics,
+            loop=loop,
+            action=action or "",
+            sampling_class=sampling_class or "",
+        )
+
+    @app.get("/insights/{insight_id}", response_class=HTMLResponse)
+    async def insight_detail(insight_id: str, request: Request) -> Response:
+        require_session(request, _settings(request))
+        return render(request, "insight_detail.html", detail=await _noc(request).insight_detail(insight_id), insight_id=insight_id)
+
     @app.get("/changes", response_class=HTMLResponse)
     async def changes(request: Request) -> Response:
         require_session(request, _settings(request))

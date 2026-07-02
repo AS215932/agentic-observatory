@@ -150,6 +150,33 @@ class NOCClient:
         data = await self._request("GET", "/loop-console/v1/outbox")
         return list(data.get("outbox", []) if isinstance(data, dict) else [])
 
+    async def insights(
+        self,
+        *,
+        loop: str | None = "noc",
+        action: str | None = None,
+        sampling_class: str | None = None,
+        case_id: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        params = [f"limit={limit}"]
+        if loop:
+            params.append(f"loop={loop}")
+        if action:
+            params.append(f"action={action}")
+        if sampling_class:
+            params.append(f"sampling_class={sampling_class}")
+        if case_id:
+            params.append(f"case_id={case_id}")
+        data = await self._request("GET", f"/loop-console/v1/insights?{'&'.join(params)}")
+        return list(data.get("insights", []) if isinstance(data, dict) else [])
+
+    async def insight_detail(self, insight_id: str) -> dict[str, Any]:
+        return dict(await self._request("GET", f"/loop-console/v1/insights/{insight_id}"))
+
+    async def insight_metrics(self, *, loop: str = "noc") -> dict[str, Any]:
+        return dict(await self._request("GET", f"/loop-console/v1/insight-metrics?loop={loop}"))
+
     async def post_action(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
         return dict(await self._request("POST", path, body))
 

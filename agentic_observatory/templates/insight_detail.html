@@ -1,0 +1,72 @@
+{% extends "base.html" %}{% block content %} {% set insight = detail.insight or
+detail.summary or {} %}
+<h1>Insight {{ insight.insight_id or insight_id }}</h1>
+<section class="card">
+  <dl>
+    <dt>Loop</dt>
+    <dd>{{ insight.loop }}</dd>
+    <dt>Action</dt>
+    <dd>{{ insight.action_selected }}</dd>
+    <dt>Sampling</dt>
+    <dd>{{ insight.sampling_class }}</dd>
+    <dt>Candidate</dt>
+    <dd>{{ insight.candidate_type }} {{ insight.candidate_source }}</dd>
+    <dt>Policy</dt>
+    <dd>{{ insight.policy_version }}</dd>
+    {% if insight.case_id %}
+    <dt>Case</dt>
+    <dd><a href="/cases/{{ insight.case_id }}">{{ insight.case_id }}</a></dd>
+    {% endif %}
+    <dt>Why now</dt>
+    <dd>{{ insight.why_now }}</dd>
+  </dl>
+</section>
+<section class="card">
+  <h2>Scores</h2>
+  <dl>
+    <dt>Expected utility</dt>
+    <dd>{{ insight.expected_utility.total }}</dd>
+    <dt>Interruption cost</dt>
+    <dd>{{ insight.interruption_cost.total }}</dd>
+    <dt>Confidence</dt>
+    <dd>{{ insight.confidence }}</dd>
+  </dl>
+</section>
+<section class="card">
+  <h2>Support Facts</h2>
+  <ul>
+    {% for fact in insight.support_facts %}
+    <li>{{ fact }}</li>
+    {% else %}
+    <li>No support facts.</li>
+    {% endfor %}
+  </ul>
+</section>
+<section class="card">
+  <h2>Labels</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>When</th>
+        <th>Reference</th>
+        <th>Reviewer</th>
+        <th>Comment</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for label in detail.labels %}
+      <tr>
+        <td>{{ label.created_at }}</td>
+        <td>{{ label.reference_action }}</td>
+        <td>{{ label.reviewer }}</td>
+        <td>{{ label.comment }}</td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="4">No labels.</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

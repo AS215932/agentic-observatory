@@ -89,9 +89,23 @@ class FakeNOC:
                 "verification_objectives": 1,
                 "knowledge_artifacts": 1,
                 "outcomes": 1,
+                "insights": 1,
             },
             "timeline_limit": 200,
             "timeline": [{"event_type": "case_opened", "summary": "opened"}],
+            "insights": [
+                {
+                    "insight_id": f"ins-{case_id}",
+                    "case_id": case_id,
+                    "loop": "noc",
+                    "action_selected": "notify",
+                    "sampling_class": "surfaced",
+                    "candidate_type": "hotspot",
+                    "candidate_source": "proactive_scanner:test",
+                    "why_now": "hotspot changed",
+                    "created_at": "2026-06-30T10:00:00+00:00",
+                }
+            ],
             "handoffs": [
                 {
                     "handoff_id": f"handoff-{case_id}",
@@ -184,6 +198,61 @@ class FakeNOC:
         self.posts.append((path, body))
         return {"status": "ok", "path": path}
 
+    async def insights(
+        self,
+        *,
+        loop: str | None = "noc",
+        action: str | None = None,
+        sampling_class: str | None = None,
+        case_id: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        rows = [
+            {
+                "insight_id": "ins-case-1",
+                "case_id": "case-1",
+                "loop": loop or "noc",
+                "action_selected": action or "notify",
+                "sampling_class": sampling_class or "surfaced",
+                "candidate_type": "hotspot",
+                "candidate_source": "proactive_scanner:test",
+                "why_now": "hotspot changed",
+                "created_at": "2026-06-30T10:00:00+00:00",
+            }
+        ]
+        if case_id:
+            rows = [row for row in rows if row["case_id"] == case_id]
+        return rows[:limit]
+
+    async def insight_detail(self, insight_id: str) -> dict[str, Any]:
+        return {
+            "insight": {
+                "insight_id": insight_id,
+                "loop": "noc",
+                "case_id": "case-1",
+                "action_selected": "notify",
+                "sampling_class": "surfaced",
+                "candidate_type": "hotspot",
+                "candidate_source": "proactive_scanner:test",
+                "why_now": "hotspot changed",
+                "expected_utility": {"total": 0.8},
+                "interruption_cost": {"total": 0.2},
+                "confidence": 0.7,
+                "support_facts": ["fact"],
+                "policy_version": "test",
+            },
+            "labels": [],
+        }
+
+    async def insight_metrics(self, *, loop: str = "noc") -> dict[str, Any]:
+        return {
+            "loop": loop,
+            "total": 1,
+            "silence_rate": 0,
+            "action_counts": {"notify": 1, "question": 0, "draft": 0, "stay_silent": 0},
+            "sampling_counts": {"surfaced": 1, "withheld_logged": 0, "sampled_quiet_interval": 0},
+        }
+
 
 def _app(
     tmp_path: Path,
@@ -245,6 +314,8 @@ def test_pages_render_without_javascript(tmp_path: Path) -> None:
             "/handoffs",
             "/verification",
             "/knowledge",
+            "/insights",
+            "/insights/ins-case-1",
             "/runs",
             "/runs/run-1",
             "/changes",

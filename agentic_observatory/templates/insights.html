@@ -1,0 +1,64 @@
+{% extends "base.html" %}{% block content %}
+<h1>Insights</h1>
+<section class="card">
+  <h2>Metrics</h2>
+  <dl>
+    <dt>Loop</dt>
+    <dd>{{ metrics.loop or loop }}</dd>
+    <dt>Total</dt>
+    <dd>{{ metrics.total or 0 }}</dd>
+    <dt>Silence rate</dt>
+    <dd>{{ metrics.silence_rate or 0 }}</dd>
+  </dl>
+  <p>
+    Actions:
+    {% for name, value in (metrics.action_counts or {}).items() %}
+    <span>{{ name }} {{ value }}</span>
+    {% endfor %}
+  </p>
+  <p>
+    Sampling:
+    {% for name, value in (metrics.sampling_counts or {}).items() %}
+    <span>{{ name }} {{ value }}</span>
+    {% endfor %}
+  </p>
+</section>
+<section class="card">
+  <h2>Recent Decisions</h2>
+  <form method="get" action="/insights">
+    <label>Loop <input name="loop" value="{{ loop }}" /></label>
+    <label>Action <input name="action" value="{{ action }}" /></label>
+    <label>Sampling <input name="sampling_class" value="{{ sampling_class }}" /></label>
+    <button>Filter</button>
+  </form>
+  <table>
+    <thead>
+      <tr>
+        <th>When</th>
+        <th>Action</th>
+        <th>Sampling</th>
+        <th>Candidate</th>
+        <th>Why</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for insight in insights %}
+      <tr>
+        <td>{{ insight.created_at }}</td>
+        <td>{{ insight.action_selected }}</td>
+        <td>{{ insight.sampling_class }}</td>
+        <td>
+          <a href="/insights/{{ insight.insight_id }}">{{ insight.candidate_type }}</a>
+          {% if insight.case_id %}<br /><a href="/cases/{{ insight.case_id }}">{{ insight.case_id }}</a>{% endif %}
+        </td>
+        <td>{{ insight.why_now }}</td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="5">No insights available.</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

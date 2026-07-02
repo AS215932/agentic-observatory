@@ -100,6 +100,33 @@ detail.summary or {} %} {% set counts = detail.counts or case.counts or {} %}
   </table>
 </section>
 <section class="card">
+  <h2>Insights</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>When</th>
+        <th>Action</th>
+        <th>Sampling</th>
+        <th>Why</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for insight in detail.insights %}
+      <tr>
+        <td>{{ insight.created_at }}</td>
+        <td>{{ insight.action_selected }}</td>
+        <td>{{ insight.sampling_class }}</td>
+        <td><a href="/insights/{{ insight.insight_id }}">{{ insight.why_now }}</a></td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="4">No insights.</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+<section class="card">
   <h2>Handoffs</h2>
   <table>
     <thead>
