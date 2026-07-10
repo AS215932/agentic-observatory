@@ -10,7 +10,7 @@ resolution-markers = [
 [[package]]
 name = "agent-core"
 version = "0.7.0"
-source = { git = "https://github.com/AS215932/agent-core?rev=d3b04dd9496d2e0928a4b0d2378b3d4d51367d34#d3b04dd9496d2e0928a4b0d2378b3d4d51367d34" }
+source = { git = "https://github.com/AS215932/agent-core?tag=v0.8.0#4329ec96d689d0dc347b3e420f6c4ac4dcdec945" }
 dependencies = [
     { name = "pydantic" },
 ]
@@ -45,7 +45,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agent-core", git = "https://github.com/AS215932/agent-core?rev=d3b04dd9496d2e0928a4b0d2378b3d4d51367d34" },
+    { name = "agent-core", git = "https://github.com/AS215932/agent-core?tag=v0.8.0" },
     { name = "aiosqlite", specifier = ">=0.20" },
     { name = "argon2-cffi", specifier = ">=23.1" },
     { name = "asyncpg", specifier = ">=0.29" },
