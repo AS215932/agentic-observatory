@@ -1,0 +1,53 @@
+{% extends "base.html" %}{% block title %}Insights — Agentic Observatory{%
+endblock %}{% block content %}
+<h1>Insight stream</h1>
+<p>
+  Every loop surface/withhold decision, <strong>including deliberate
+  silence</strong>. Label decisions to build the IDQ/CGS record that justifies
+  gate relaxation.
+</p>
+<nav class="filters" aria-label="Insight filters">
+  <a class="{% if not loop and not sample %}selected{% endif %}" href="/insights">All</a>
+  <a class="{% if loop == 'noc' %}selected{% endif %}" href="/insights?loop=noc">NOC</a>
+  <a class="{% if loop == 'engineering' %}selected{% endif %}" href="/insights?loop=engineering">Engineering</a>
+  <a class="{% if loop == 'soc' %}selected{% endif %}" href="/insights?loop=soc">SOC</a>
+  <a class="{% if loop == 'knowledge' %}selected{% endif %}" href="/insights?loop=knowledge">Knowledge</a>
+  <a class="{% if sampling_class == 'withheld_logged' %}selected{% endif %}" href="/insights?sampling_class=withheld_logged">Withheld</a>
+  <a class="{% if sample == 'withheld' %}selected{% endif %}" href="/insights?sample=withheld">Daily withheld sample</a>
+</nav>
+{% if fingerprint %}
+<p>Filtered to fingerprint <code>{{ fingerprint }}</code>. <a href="/insights">Clear</a></p>
+{% endif %}
+<table>
+  <thead>
+    <tr>
+      <th>When</th>
+      <th>Loop</th>
+      <th>Action</th>
+      <th>Sampling</th>
+      <th>Why now</th>
+      <th>Label</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for item in insights %}
+    <tr>
+      <td>{{ item.record.created_at or item.received_at }}</td>
+      <td>{{ item.loop }}</td>
+      <td>
+        <a href="/insights/{{ item.record.insight_id }}">{{ item.record.action_selected }}</a>
+      </td>
+      <td>{{ item.record.sampling_class }}</td>
+      <td>{{ (item.record.why_now or "")[:140] }}</td>
+      <td>
+        {% if item.label %}{{ item.label.feedback.disposition if item.label.feedback else "labeled" }}{% else %}—{% endif %}
+      </td>
+    </tr>
+    {% else %}
+    <tr>
+      <td colspan="6">No insight decisions in the collector stream yet.</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

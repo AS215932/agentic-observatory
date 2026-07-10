@@ -76,6 +76,36 @@ class CollectorClient:
         data = await self._get("/v1/metrics/daily")
         return list(data.get("metrics", data) if isinstance(data, dict) else data)
 
+    async def insights(
+        self,
+        *,
+        loop: str | None = None,
+        record_type: str | None = None,
+        since: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        if not self.base_url:
+            return []
+        params: dict[str, Any] = {"limit": limit}
+        if loop:
+            params["loop"] = loop
+        if record_type:
+            params["record_type"] = record_type
+        if since:
+            params["since"] = since
+        data = await self._get("/v1/insights", params)
+        return list(data) if isinstance(data, list) else []
+
+    async def post_trace_event(self, event: dict[str, Any], *, token: str = "") -> dict[str, Any]:
+        """Ingest one TraceEvent (used for insight_label writes)."""
+        if not self.base_url:
+            return {"status": "disabled"}
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(f"{self.base_url}/v1/trace", json=event, headers=headers)
+            response.raise_for_status()
+            return dict(response.json())
+
 
 class NOCClient:
     def __init__(self, base_url: AnyHttpUrl | str | None, secret: str, *, timeout: float = 10.0) -> None:

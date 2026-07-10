@@ -1,0 +1,123 @@
+{% extends "base.html" %}{% block title %}Insight {{ record.insight_id }} —
+Agentic Observatory{% endblock %}{% block content %}
+<h1>Insight {{ record.insight_id }}</h1>
+<p><a href="/insights">← Back to insight stream</a></p>
+<dl>
+  <dt>Loop</dt>
+  <dd>{{ record.loop }}</dd>
+  <dt>Decision</dt>
+  <dd>
+    <strong>{{ record.action_selected }}</strong> ({{ record.sampling_class }})
+  </dd>
+  <dt>Why now</dt>
+  <dd>{{ record.why_now or "—" }}</dd>
+  <dt>Fingerprint</dt>
+  <dd>
+    <code>{{ record.fingerprint }}</code>
+    <a href="/insights?fingerprint={{ record.fingerprint }}">history</a>
+  </dd>
+  <dt>Created</dt>
+  <dd>{{ record.created_at }}</dd>
+  {% if record.case_id %}
+  <dt>Case</dt>
+  <dd><a href="/cases/{{ record.case_id }}">{{ record.case_id }}</a></dd>
+  {% endif %}
+  <dt>Expected utility / interruption cost</dt>
+  <dd>
+    {{ record.expected_utility.total if record.expected_utility else "—" }} /
+    {{ record.interruption_cost.total if record.interruption_cost else "—" }}
+  </dd>
+  <dt>Budget context</dt>
+  <dd><code>{{ record.budget_context }}</code></dd>
+</dl>
+
+<h2>Support facts</h2>
+<ul>
+  {% for fact in record.support_facts %}
+  <li>{{ fact }}</li>
+  {% else %}
+  <li>—</li>
+  {% endfor %}
+</ul>
+
+<h2>Evidence</h2>
+<table>
+  <thead>
+    <tr><th>Kind</th><th>Ref</th><th>Title</th><th>Authority</th></tr>
+  </thead>
+  <tbody>
+    {% for ref in record.evidence_refs %}
+    <tr>
+      <td>{{ ref.kind }}</td>
+      <td><code>{{ ref.ref }}</code></td>
+      <td>{{ ref._title or "" }}</td>
+      <td>{{ ref.authority or "" }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4">No evidence refs.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+{% if label %}
+<h2>Operator label</h2>
+<dl>
+  <dt>Disposition</dt>
+  <dd>{{ label.feedback.disposition if label.feedback else "—" }}</dd>
+  <dt>Reference action</dt>
+  <dd>{{ label.reference_action }}</dd>
+  <dt>Faithfulness</dt>
+  <dd>{{ label.faithfulness_verdict or "—" }}</dd>
+  <dt>Reviewer</dt>
+  <dd>{{ label.reviewer }}</dd>
+</dl>
+{% elif "insight_label" in enabled_actions %}
+<h2>Label this decision</h2>
+<form class="stack" action="/actions/insights/{{ record.insight_id }}/label" method="post">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+  <fieldset>
+    <legend>Disposition</legend>
+    <label><input type="radio" name="disposition" value="accept" checked /> Accept — the selected action was right</label>
+    <label><input type="radio" name="disposition" value="defer" /> Defer — right, but silence was acceptable</label>
+    <label><input type="radio" name="disposition" value="dismiss" /> Dismiss — should have stayed silent</label>
+    <label><input type="radio" name="disposition" value="edit" /> Edit — pick the reference action below</label>
+  </fieldset>
+  <label
+    >Reference action (edit only)
+    <select name="reference_action">
+      <option value="">(keep selected)</option>
+      <option value="notify">notify</option>
+      <option value="question">question</option>
+      <option value="draft">draft</option>
+      <option value="stay_silent">stay_silent</option>
+    </select>
+  </label>
+  {% if okf_refs %}
+  <fieldset>
+    <legend>Gold evidence (edit only; accept/defer affirm all citations)</legend>
+    {% for ref in okf_refs %}
+    <label
+      ><input type="checkbox" name="gold_ref" value="{{ ref.ref }}" checked />
+      <code>{{ ref.ref }}</code> {{ ref._title }}</label
+    >
+    {% endfor %}
+  </fieldset>
+  {% endif %}
+  <label
+    >Faithfulness
+    <select name="faithfulness_verdict">
+      <option value="">(unset)</option>
+      <option value="faithful">faithful</option>
+      <option value="partially_faithful">partially_faithful</option>
+      <option value="unsupported">unsupported</option>
+      <option value="not_applicable">not_applicable</option>
+    </select>
+  </label>
+  <label>Comment <input type="text" name="comment" maxlength="500" /></label>
+  <button>Submit label</button>
+</form>
+{% else %}
+<p class="banner">
+  Labeling is disabled (enable the <code>insight_label</code> action).
+</p>
+{% endif %} {% endblock %}

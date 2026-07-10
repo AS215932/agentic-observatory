@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import secrets
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -230,6 +231,99 @@ async def _verification_objectives_for_cases(request: Request, cases: list[dict[
     return _sort_by_recent(objectives, "next_check_at", "last_checked_at")
 
 
+def _sha16(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+async def _insight_stream(
+    request: Request, *, limit: int = 1000
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
+    """Collector insight items split into decisions (newest first, withheld
+    included by default — that is the point of the inbox) and labels keyed by
+    insight id."""
+    items = await _collector(request).insights(limit=limit)
+    decisions: list[dict[str, Any]] = []
+    labels_by_insight: dict[str, dict[str, Any]] = {}
+    for item in items:
+        record = item.get("record")
+        if not isinstance(record, dict):
+            continue
+        if item.get("record_type") == "label":
+            labels_by_insight.setdefault(str(record.get("insight_id") or ""), record)
+        elif item.get("record_type") == "decision":
+            decisions.append(
+                {
+                    "record": record,
+                    "loop": str(item.get("loop") or record.get("loop") or ""),
+                    "received_at": str(item.get("received_at") or ""),
+                    "label": None,
+                }
+            )
+    return decisions, labels_by_insight
+
+
+def _build_insight_label(
+    record: dict[str, Any],
+    *,
+    disposition: str,
+    reference_action: str,
+    faithfulness_verdict: str,
+    gold_refs: list[str],
+    comment: str,
+    reviewer: str,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    """Map an operator disposition onto an agent-core InsightLabel dict.
+
+    accept -> the selected action was right; defer -> right but silence was
+    acceptable; dismiss -> should have stayed silent; edit -> operator picks
+    the reference action and optionally the gold evidence subset."""
+    insight_id = str(record.get("insight_id") or "")
+    selected = str(record.get("action_selected") or "notify")
+    if disposition == "accept":
+        reference = selected
+        alternatives: list[str] = []
+    elif disposition == "defer":
+        reference = selected
+        alternatives = ["stay_silent"] if selected != "stay_silent" else []
+    elif disposition == "dismiss":
+        reference = "stay_silent"
+        alternatives = []
+    else:  # edit
+        reference = reference_action or selected
+        alternatives = []
+    okf_refs = [
+        ref
+        for ref in record.get("evidence_refs") or []
+        if isinstance(ref, dict) and str(ref.get("kind") or "").startswith("okf_")
+    ]
+    if disposition == "edit" and gold_refs:
+        chosen = set(gold_refs)
+        evidence_refs = [ref for ref in okf_refs if str(ref.get("ref")) in chosen]
+    elif disposition in {"accept", "defer"}:
+        # Affirming the insight affirms its citations as gold evidence.
+        evidence_refs = okf_refs
+    else:
+        evidence_refs = []
+    label: dict[str, Any] = {
+        "label_id": f"lbl_obs_{_sha16(f'{insight_id}:{reviewer}:{disposition}:{idempotency_key}')}",
+        "insight_id": insight_id,
+        "loop": str(record.get("loop") or "noc"),
+        "created_at": datetime.now(UTC).isoformat(),
+        "reference_action": reference,
+        "acceptable_alternatives": alternatives,
+        "evidence_refs": [
+            {key: value for key, value in ref.items() if not str(key).startswith("_")}
+            for ref in evidence_refs
+        ],
+        "feedback": {"disposition": disposition, "comment": comment[:500]},
+        "reviewer": reviewer,
+    }
+    if faithfulness_verdict in {"faithful", "partially_faithful", "unsupported", "not_applicable"}:
+        label["faithfulness_verdict"] = faithfulness_verdict
+    return label
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
@@ -394,6 +488,147 @@ def create_app(settings: Settings | None = None, store: ObservatoryStore | None 
             fingerprint=fingerprint or "",
             limit=limit,
         )
+
+    @app.get("/insights", response_class=HTMLResponse)
+    async def insights_page(
+        request: Request,
+        loop: str | None = None,
+        action: str | None = None,
+        sampling_class: str | None = None,
+        fingerprint: str | None = None,
+        sample: str | None = None,
+        limit: int = 100,
+    ) -> Response:
+        require_session(request, _settings(request))
+        decisions, labels_by_insight = await _insight_stream(request)
+        if loop:
+            decisions = [item for item in decisions if item["loop"] == loop]
+        if action:
+            decisions = [item for item in decisions if item["record"].get("action_selected") == action]
+        if sampling_class:
+            decisions = [
+                item for item in decisions if item["record"].get("sampling_class") == sampling_class
+            ]
+        if fingerprint:
+            decisions = [
+                item for item in decisions if item["record"].get("fingerprint") == fingerprint
+            ]
+        if sample == "withheld":
+            # Deterministic daily sample of withheld/quiet decisions so IDQ is
+            # not labeled only on what already surfaced (selection bias), and
+            # stay_silent reference labels accumulate.
+            day = datetime.now(UTC).date().isoformat()
+            withheld = [
+                item
+                for item in decisions
+                if item["record"].get("sampling_class") in {"withheld_logged", "sampled_quiet_interval"}
+            ]
+            withheld.sort(
+                key=lambda item: _sha16(f"{day}:{item['record'].get('insight_id')}")
+            )
+            decisions = withheld[:10]
+        for item in decisions:
+            item["label"] = labels_by_insight.get(str(item["record"].get("insight_id")))
+        return render(
+            request,
+            "insights.html",
+            insights=decisions[:limit],
+            loop=loop or "",
+            action=action or "",
+            sampling_class=sampling_class or "",
+            fingerprint=fingerprint or "",
+            sample=sample or "",
+        )
+
+    @app.get("/insights/{insight_id}", response_class=HTMLResponse)
+    async def insight_detail(insight_id: str, request: Request) -> Response:
+        require_session(request, _settings(request))
+        decisions, labels_by_insight = await _insight_stream(request)
+        item = next(
+            (entry for entry in decisions if str(entry["record"].get("insight_id")) == insight_id),
+            None,
+        )
+        if item is None:
+            raise HTTPException(status_code=404, detail="Insight not found")
+        record = item["record"]
+        okf_refs = [
+            ref
+            for ref in record.get("evidence_refs") or []
+            if isinstance(ref, dict) and str(ref.get("kind") or "").startswith("okf_")
+        ]
+        titles = _knowledge_memory(request).concept_titles(
+            [str(ref.get("ref")) for ref in okf_refs]
+        )
+        for ref in okf_refs:
+            ref["_title"] = titles.get(str(ref.get("ref")), "")
+        return render(
+            request,
+            "insight_detail.html",
+            item=item,
+            record=record,
+            okf_refs=okf_refs,
+            label=labels_by_insight.get(insight_id),
+        )
+
+    @app.post("/actions/insights/{insight_id}/label")
+    async def action_insight_label(insight_id: str, request: Request) -> Response:
+        settings_obj = _settings(request)
+        session = require_session(request, settings_obj)
+        await validate_session_csrf(request, session, settings_obj)
+        if not settings_obj.action_allowed("insight_label"):
+            raise HTTPException(status_code=403, detail="Observatory action 'insight_label' is not enabled")
+        form = await request.form()
+        decisions, _labels = await _insight_stream(request)
+        item = next(
+            (entry for entry in decisions if str(entry["record"].get("insight_id")) == insight_id),
+            None,
+        )
+        if item is None:
+            raise HTTPException(status_code=404, detail="Insight not found")
+        record = item["record"]
+        disposition = str(form.get("disposition") or "").strip().lower()
+        if disposition not in {"accept", "dismiss", "defer", "edit"}:
+            raise HTTPException(status_code=422, detail="disposition must be accept, dismiss, defer, or edit")
+        idempotency_key = str(form.get("idempotency_key") or secrets.token_urlsafe(12))
+        scope = f"insight_label:insight:{insight_id}"
+        existing = await _store(request).get_idempotency(scope, idempotency_key)
+        if existing is not None:
+            return RedirectResponse(existing.get("redirect", "/insights"), status_code=status.HTTP_303_SEE_OTHER)
+        label = _build_insight_label(
+            record,
+            disposition=disposition,
+            reference_action=str(form.get("reference_action") or ""),
+            faithfulness_verdict=str(form.get("faithfulness_verdict") or ""),
+            gold_refs=[str(value) for value in form.getlist("gold_ref")],
+            comment=str(form.get("comment") or ""),
+            reviewer=session.actor_id,
+            idempotency_key=idempotency_key,
+        )
+        event = {
+            "event_type": "insight_label",
+            "summary": f"Operator label {label['label_id']} for {insight_id}",
+            "payload": {"insight_label": label},
+        }
+        result = await _collector(request).post_trace_event(
+            event, token=settings_obj.collector_ingest_token
+        )
+        await _store(request).audit(
+            actor_id=session.actor_id,
+            action="insight_label",
+            target_type="insight",
+            target_id=insight_id,
+            idempotency_key=idempotency_key,
+            status=str(result.get("status") or "ok"),
+            payload={"label": label, "result": result},
+        )
+        redirect_to = f"/insights/{insight_id}"
+        await _store(request).record_idempotency(
+            scope=scope,
+            key=idempotency_key,
+            actor_id=session.actor_id,
+            result={"redirect": redirect_to, "result": result},
+        )
+        return RedirectResponse(redirect_to, status_code=status.HTTP_303_SEE_OTHER)
 
     @app.get("/verification", response_class=HTMLResponse)
     async def verification(request: Request, scope: str = "live") -> Response:
