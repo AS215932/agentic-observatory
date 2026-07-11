@@ -73,18 +73,58 @@ Agentic Observatory{% endblock %}{% block content %}
 </dl>
 {% elif "insight_label" in enabled_actions %}
 <h2>Label this decision</h2>
-<form class="stack" action="/actions/insights/{{ record.insight_id }}/label" method="post">
+<style>
+  /* The reference-action and gold-evidence controls only take effect for the
+     Edit disposition (accept/defer/dismiss ignore them server-side). Grey them
+     out and block interaction unless Edit is selected, so they aren't mistaken
+     for active fields. Pure CSS — the app CSP forbids inline scripts. */
+  form.label-form:not(:has(input[name="disposition"][value="edit"]:checked))
+    .edit-only {
+    opacity: 0.4;
+    pointer-events: none;
+  }
+  .field-help {
+    display: block;
+    font-size: 0.85em;
+    opacity: 0.75;
+    margin: 0.15rem 0 0.6rem;
+  }
+</style>
+<form
+  class="stack label-form"
+  action="/actions/insights/{{ record.insight_id }}/label"
+  method="post"
+>
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
   <input type="hidden" name="idempotency_key" value="{{ form_idempotency_key }}" />
+
   <fieldset>
-    <legend>Disposition</legend>
-    <label><input type="radio" name="disposition" value="accept" checked /> Accept — the selected action was right</label>
-    <label><input type="radio" name="disposition" value="defer" /> Defer — right, but silence was acceptable</label>
-    <label><input type="radio" name="disposition" value="dismiss" /> Dismiss — should have stayed silent</label>
-    <label><input type="radio" name="disposition" value="edit" /> Edit — pick the reference action below</label>
+    <legend>Was surfacing this the right call?</legend>
+    <label
+      ><input type="radio" name="disposition" value="accept" checked />
+      <strong>Accept</strong> — yes, this was worth surfacing.
+      <span class="field-help">Also affirms every cited concept below as good evidence (grounding score 1.0). Use Edit instead if some citations were off-topic.</span></label
+    >
+    <label
+      ><input type="radio" name="disposition" value="defer" />
+      <strong>Defer</strong> — fine to surface, but staying silent would have
+      been acceptable too.
+      <span class="field-help">Also affirms every citation.</span></label
+    >
+    <label
+      ><input type="radio" name="disposition" value="dismiss" />
+      <strong>Dismiss</strong> — this should have stayed silent (noise).</label
+    >
+    <label
+      ><input type="radio" name="disposition" value="edit" />
+      <strong>Edit</strong> — the action and/or its citations were partly wrong;
+      correct them below.</label
+    >
   </fieldset>
-  <label
-    >Reference action (edit only)
+
+  <label class="edit-only"
+    >Reference action
+    <span class="field-help">What the loop should have done instead (Edit only).</span>
     <select name="reference_action">
       <option value="">(keep selected)</option>
       <option value="notify">notify</option>
@@ -93,12 +133,15 @@ Agentic Observatory{% endblock %}{% block content %}
       <option value="stay_silent">stay_silent</option>
     </select>
   </label>
+
   {% if okf_refs %}
-  <fieldset>
-    <legend>
-      Gold evidence (edit only — check exactly what you affirm; accept/defer
-      affirm all citations automatically)
-    </legend>
+  <fieldset class="edit-only">
+    <legend>Which citations were actually good?</legend>
+    <span class="field-help"
+      >Check only the knowledge concepts that genuinely support this insight
+      (Edit only). Accept/Defer affirm all of them for you. The telemetry signal
+      that triggered the insight is always kept and isn't listed here.</span
+    >
     {% for ref in okf_refs %}
     <label
       ><input type="checkbox" name="gold_ref" value="{{ ref.ref }}" />
@@ -107,8 +150,15 @@ Agentic Observatory{% endblock %}{% block content %}
     {% endfor %}
   </fieldset>
   {% endif %}
+
   <label
     >Faithfulness
+    <span class="field-help"
+      >Do the cited concepts still hold up? <strong>faithful</strong> = all
+      exist &amp; current · <strong>partially_faithful</strong> = some ·
+      <strong>unsupported</strong> = none, or a cited concept is deprecated ·
+      <strong>not_applicable</strong> = no knowledge cited.</span
+    >
     <select name="faithfulness_verdict">
       <option value="">(unset)</option>
       <option value="faithful">faithful</option>
@@ -117,6 +167,7 @@ Agentic Observatory{% endblock %}{% block content %}
       <option value="not_applicable">not_applicable</option>
     </select>
   </label>
+
   <label>Comment <input type="text" name="comment" maxlength="500" /></label>
   <button>Submit label</button>
 </form>
