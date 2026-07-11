@@ -75,6 +75,7 @@ Agentic Observatory{% endblock %}{% block content %}
 <h2>Label this decision</h2>
 <form class="stack" action="/actions/insights/{{ record.insight_id }}/label" method="post">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+  <input type="hidden" name="idempotency_key" value="{{ form_idempotency_key }}" />
   <fieldset>
     <legend>Disposition</legend>
     <label><input type="radio" name="disposition" value="accept" checked /> Accept — the selected action was right</label>
@@ -94,10 +95,13 @@ Agentic Observatory{% endblock %}{% block content %}
   </label>
   {% if okf_refs %}
   <fieldset>
-    <legend>Gold evidence (edit only; accept/defer affirm all citations)</legend>
+    <legend>
+      Gold evidence (edit only — check exactly what you affirm; accept/defer
+      affirm all citations automatically)
+    </legend>
     {% for ref in okf_refs %}
     <label
-      ><input type="checkbox" name="gold_ref" value="{{ ref.ref }}" checked />
+      ><input type="checkbox" name="gold_ref" value="{{ ref.ref }}" />
       <code>{{ ref.ref }}</code> {{ ref._title }}</label
     >
     {% endfor %}

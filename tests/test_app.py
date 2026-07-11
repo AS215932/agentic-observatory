@@ -195,6 +195,7 @@ def _app(
     enabled_actions: str | None = None,
     live_case_max_age_hours: float = 24 * 365 * 10,
     knowledge_export_db_path: str | None = None,
+    collector_ingest_token: str = "",
 ) -> tuple[FastAPI, FakeNOC]:
     if enabled_actions is None:
         enabled_actions = (
@@ -212,6 +213,7 @@ def _app(
         enabled_actions=enabled_actions,
         live_case_max_age_hours=live_case_max_age_hours,
         knowledge_export_db_path=knowledge_export_db_path or str(tmp_path / "missing-knowledge.sqlite"),
+        collector_ingest_token=collector_ingest_token,
     )
     app = create_app(settings)
     asyncio.run(app.state.store.init())
@@ -655,8 +657,19 @@ class FakeInsightCollector(FakeCollector):
         return {"status": "stored", "event_id": "ev-1"}
 
 
-def _insight_app(tmp_path: Path, *, actions: bool = False, enabled_actions: str | None = None) -> tuple[FastAPI, FakeInsightCollector]:
-    app, _noc = _app(tmp_path, actions=actions, enabled_actions=enabled_actions)
+def _insight_app(
+    tmp_path: Path,
+    *,
+    actions: bool = False,
+    enabled_actions: str | None = None,
+    collector_ingest_token: str = "test-ingest-token",
+) -> tuple[FastAPI, FakeInsightCollector]:
+    app, _noc = _app(
+        tmp_path,
+        actions=actions,
+        enabled_actions=enabled_actions,
+        collector_ingest_token=collector_ingest_token,
+    )
     fake = FakeInsightCollector()
     app.state.collector = fake
     return app, fake
@@ -750,3 +763,45 @@ def test_insight_label_action_denied_when_not_enabled(tmp_path: Path) -> None:
         )
         assert response.status_code == 403
         assert fake.posted == []
+
+
+def test_insight_label_fails_closed_without_ingest_token(tmp_path: Path) -> None:
+    app, fake = _insight_app(
+        tmp_path, actions=True, enabled_actions="insight_label", collector_ingest_token=""
+    )
+    with TestClient(app) as client:
+        csrf = _login(client)
+        response = client.post(
+            "/actions/insights/ins-surfaced/label",
+            data={"csrf_token": csrf, "disposition": "accept"},
+            follow_redirects=False,
+        )
+        # labels drive gate relaxation: never sent unauthenticated
+        assert response.status_code == 503
+        assert fake.posted == []
+
+
+def test_insight_label_rejects_unknown_reference_action(tmp_path: Path) -> None:
+    app, fake = _insight_app(tmp_path, actions=True, enabled_actions="insight_label")
+    with TestClient(app) as client:
+        csrf = _login(client)
+        response = client.post(
+            "/actions/insights/ins-surfaced/label",
+            data={"csrf_token": csrf, "disposition": "edit", "reference_action": "approve"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 422
+        assert fake.posted == []
+
+
+def test_label_form_has_idempotency_key_and_unchecked_gold_refs(tmp_path: Path) -> None:
+    app, _fake = _insight_app(tmp_path, actions=True, enabled_actions="insight_label")
+    with TestClient(app) as client:
+        _login(client)
+        page = client.get("/insights/ins-surfaced")
+        assert page.status_code == 200
+        # stable per-render idempotency key protects double-clicks
+        assert re.search(r'name="idempotency_key"\s+value="[^"]{8,}"', page.text)
+        # gold refs are opt-in on edit, never preselected
+        gold_inputs = re.findall(r'<input type="checkbox" name="gold_ref"[^>]*>', page.text)
+        assert gold_inputs and all("checked" not in tag for tag in gold_inputs)

@@ -568,6 +568,7 @@ def create_app(settings: Settings | None = None, store: ObservatoryStore | None 
             record=record,
             okf_refs=okf_refs,
             label=labels_by_insight.get(insight_id),
+            form_idempotency_key=secrets.token_urlsafe(12),
         )
 
     @app.post("/actions/insights/{insight_id}/label")
@@ -577,6 +578,13 @@ def create_app(settings: Settings | None = None, store: ObservatoryStore | None 
         await validate_session_csrf(request, session, settings_obj)
         if not settings_obj.action_allowed("insight_label"):
             raise HTTPException(status_code=403, detail="Observatory action 'insight_label' is not enabled")
+        if not settings_obj.collector_ingest_token:
+            # Labels drive gate relaxation; never send them unauthenticated or
+            # rely on the collector to reject them.
+            raise HTTPException(
+                status_code=503,
+                detail="insight_label requires OBSERVATORY_COLLECTOR_INGEST_TOKEN to be configured",
+            )
         form = await request.form()
         decisions, _labels = await _insight_stream(request)
         item = next(
@@ -589,6 +597,14 @@ def create_app(settings: Settings | None = None, store: ObservatoryStore | None 
         disposition = str(form.get("disposition") or "").strip().lower()
         if disposition not in {"accept", "dismiss", "defer", "edit"}:
             raise HTTPException(status_code=422, detail="disposition must be accept, dismiss, defer, or edit")
+        reference_action = str(form.get("reference_action") or "").strip().lower()
+        if reference_action and reference_action not in {"notify", "question", "draft", "stay_silent"}:
+            # Labels feed IDQ/CGS; an edited reference action outside the
+            # contract's action space must be rejected server-side.
+            raise HTTPException(
+                status_code=422,
+                detail="reference_action must be notify, question, draft, or stay_silent",
+            )
         idempotency_key = str(form.get("idempotency_key") or secrets.token_urlsafe(12))
         scope = f"insight_label:insight:{insight_id}"
         existing = await _store(request).get_idempotency(scope, idempotency_key)
@@ -597,7 +613,7 @@ def create_app(settings: Settings | None = None, store: ObservatoryStore | None 
         label = _build_insight_label(
             record,
             disposition=disposition,
-            reference_action=str(form.get("reference_action") or ""),
+            reference_action=reference_action,
             faithfulness_verdict=str(form.get("faithfulness_verdict") or ""),
             gold_refs=[str(value) for value in form.getlist("gold_ref")],
             comment=str(form.get("comment") or ""),
