@@ -842,3 +842,73 @@ def test_label_form_has_idempotency_key_and_unchecked_gold_refs(tmp_path: Path) 
         # gold refs are opt-in on edit, never preselected
         gold_inputs = re.findall(r'<input type="checkbox" name="gold_ref"[^>]*>', page.text)
         assert gold_inputs and all("checked" not in tag for tag in gold_inputs)
+
+
+# --- insight metrics page + sync button -------------------------------------
+
+
+class FakeKnowledgeApi:
+    async def metrics(self, *, loop=None, source="ledger"):
+        return {
+            "available": True,
+            "source": source,
+            "loop": loop,
+            "metrics": {
+                "idq": 1.0 if source == "ledger" else 0.75,
+                "cgs": 0.5,
+                "silence_rate": 0.2,
+                "label_count": 3,
+                "decision_count": 5,
+            },
+        }
+
+
+class FakeGitHub:
+    def __init__(self) -> None:
+        self.dispatched: list[tuple[str, str, str]] = []
+
+    async def dispatch_workflow(self, repository, workflow_file, *, ref="main"):
+        self.dispatched.append((repository, workflow_file, ref))
+        return True
+
+
+def test_insights_metrics_page_renders_live_and_ledger(tmp_path: Path) -> None:
+    app, _fake = _insight_app(tmp_path)
+    app.state.knowledge_api = FakeKnowledgeApi()
+    with TestClient(app) as client:
+        _login(client)
+        page = client.get("/insights/metrics")
+        assert page.status_code == 200
+        assert "Insight metrics" in page.text
+        assert "live" in page.text and "ledger" in page.text
+        assert "noc" in page.text and "engineering" in page.text
+        assert "0.75" in page.text  # live idq
+        assert "1.0" in page.text  # ledger idq
+
+
+def test_insight_sync_dispatches_workflow_when_enabled(tmp_path: Path) -> None:
+    app, _fake = _insight_app(tmp_path, actions=True, enabled_actions="insight_label")
+    app.state.knowledge_api = FakeKnowledgeApi()
+    gh = FakeGitHub()
+    app.state.github = gh
+    with TestClient(app) as client:
+        csrf = _login(client)
+        resp = client.post(
+            "/actions/insights/sync",
+            data={"csrf_token": csrf},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert gh.dispatched == [("AS215932/knowledge", "insight-sync.yml", "main")]
+
+
+def test_insight_sync_forbidden_when_action_disabled(tmp_path: Path) -> None:
+    app, _fake = _insight_app(tmp_path)  # actions off
+    with TestClient(app) as client:
+        csrf = _login(client)
+        resp = client.post(
+            "/actions/insights/sync",
+            data={"csrf_token": csrf},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 403

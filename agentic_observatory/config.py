@@ -39,6 +39,13 @@ class Settings(BaseSettings):
     noc_loop_console_secret: str = ""
     github_token: str = ""
     knowledge_export_db_path: str = "/opt/knowledge/exports/knowledge.sqlite"
+    # Standalone Knowledge read API (insight metrics + concepts). Read-only.
+    knowledge_api_base_url: AnyHttpUrl | None = None
+    # "Sync now" dispatches this workflow_dispatch — the durable ledger sync
+    # runs as a reviewed PR, never an ad-hoc write from the console.
+    insight_sync_workflow_repo: str = "AS215932/knowledge"
+    insight_sync_workflow_file: str = "insight-sync.yml"
+    insight_sync_workflow_ref: str = "main"
 
     actions_enabled: bool = False
     read_only: bool = True

@@ -1,0 +1,58 @@
+{% extends "base.html" %}{% block title %}Insight metrics — Agentic
+Observatory{% endblock %}{% block content %}
+<h1>Insight metrics</h1>
+<p><a href="/insights">← insight stream</a></p>
+<p>
+  <strong>Live</strong> is computed straight from the collector stream (instant
+  feedback after you label). <strong>Ledger</strong> is computed from the
+  committed git ledger — the reviewed, reproducible number that gate promotions
+  use. IDQ / CGS are <code>—</code> until there are labels.
+</p>
+
+{% if "insight_label" in enabled_actions %}
+<form action="/actions/insights/sync" method="post" class="stack">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+  <button>Sync now</button>
+  <span style="font-size: 0.85em; opacity: 0.75"
+    >Dispatches the ledger-sync workflow — durable archival lands as a reviewed
+    PR, never a direct write.</span
+  >
+</form>
+{% endif %}
+
+<table>
+  <thead>
+    <tr>
+      <th>Loop</th>
+      <th>Source</th>
+      <th>IDQ</th>
+      <th>CGS</th>
+      <th>Silence</th>
+      <th>Labels</th>
+      <th>Decisions</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in rows %} {% for kind, m in [("live", row.live), ("ledger",
+    row.ledger)] %}
+    <tr>
+      {% if kind == "live" %}
+      <td rowspan="2"><strong>{{ row.loop }}</strong></td>
+      {% endif %}
+      <td>{{ kind }}</td>
+      {% if m.available %} {% set met = m.metrics %} {% set idq = met.get("idq")
+      %} {% set cgs = met.get("cgs") %} {% set silence = met.get("silence_rate")
+      %}
+      <td>{{ idq if idq is not none else "—" }}</td>
+      <td>{{ cgs if cgs is not none else "—" }}</td>
+      <td>{{ silence if silence is not none else "—" }}</td>
+      <td>{{ met.get("label_count", 0) }}</td>
+      <td>{{ met.get("decision_count", 0) }}</td>
+      {% else %}
+      <td colspan="5"><em>unavailable: {{ m.reason }}</em></td>
+      {% endif %}
+    </tr>
+    {% endfor %} {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

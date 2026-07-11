@@ -16,7 +16,12 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from agentic_observatory.analysis import build_change_impact_report, report_to_dict
-from agentic_observatory.clients import CollectorClient, GitHubClient, NOCClient
+from agentic_observatory.clients import (
+    CollectorClient,
+    GitHubClient,
+    KnowledgeApiClient,
+    NOCClient,
+)
 from agentic_observatory.config import Settings, get_settings
 from agentic_observatory.db import ObservatoryStore
 from agentic_observatory.domain import (
@@ -108,6 +113,15 @@ def _github(request: Request) -> GitHubClient:
 
 def _knowledge_memory(request: Request) -> KnowledgeLoopMemory:
     return cast(KnowledgeLoopMemory, request.app.state.knowledge_memory)
+
+
+def _knowledge_api(request: Request) -> KnowledgeApiClient:
+    return cast(KnowledgeApiClient, request.app.state.knowledge_api)
+
+
+# Loops the metrics page summarises. Kept small + explicit so a new producer is
+# a one-line change, not a scan of the whole stream.
+METRICS_LOOPS = ("noc", "engineering", "soc", "knowledge")
 
 
 def template_context(request: Request, **kwargs: Any) -> dict[str, Any]:
@@ -350,6 +364,7 @@ def create_app(settings: Settings | None = None, store: ObservatoryStore | None 
         app.state.noc = NOCClient(settings.noc_base_url, settings.noc_loop_console_secret, timeout=settings.request_timeout_seconds)
         app.state.github = GitHubClient(settings.github_token, timeout=settings.request_timeout_seconds)
         app.state.knowledge_memory = KnowledgeLoopMemory(settings.knowledge_export_db_path)
+        app.state.knowledge_api = KnowledgeApiClient(settings.knowledge_api_base_url, timeout=settings.request_timeout_seconds)
     app.mount("/static", StaticFiles(directory="agentic_observatory/static"), name="static")
 
     @app.middleware("http")
@@ -539,6 +554,45 @@ def create_app(settings: Settings | None = None, store: ObservatoryStore | None 
             fingerprint=fingerprint or "",
             sample=sample or "",
         )
+
+    # Declared before /insights/{insight_id} so "metrics" isn't parsed as an id.
+    @app.get("/insights/metrics", response_class=HTMLResponse)
+    async def insights_metrics(request: Request) -> Response:
+        require_session(request, _settings(request))
+        api = _knowledge_api(request)
+        rows = []
+        for loop in METRICS_LOOPS:
+            live, ledger = await asyncio.gather(
+                api.metrics(loop=loop, source="collector"),
+                api.metrics(loop=loop, source="ledger"),
+            )
+            rows.append({"loop": loop, "live": live, "ledger": ledger})
+        return render(request, "insights_metrics.html", rows=rows)
+
+    @app.post("/actions/insights/sync")
+    async def action_insight_sync(request: Request) -> Response:
+        settings_obj = _settings(request)
+        session = require_session(request, settings_obj)
+        await validate_session_csrf(request, session, settings_obj)
+        # Gated with the same flag as labelling: syncing persists labels to the
+        # reviewed ledger, so it belongs to the same write-enablement stage.
+        if not settings_obj.action_allowed("insight_label"):
+            raise HTTPException(status_code=403, detail="Observatory action 'insight_label' is not enabled")
+        dispatched = await _github(request).dispatch_workflow(
+            settings_obj.insight_sync_workflow_repo,
+            settings_obj.insight_sync_workflow_file,
+            ref=settings_obj.insight_sync_workflow_ref,
+        )
+        await _store(request).audit(
+            actor_id=session.actor_id,
+            action="insight_sync",
+            target_type="insight_stream",
+            target_id="all",
+            idempotency_key=secrets.token_urlsafe(12),
+            status="dispatched" if dispatched else "unavailable",
+            payload={"repo": settings_obj.insight_sync_workflow_repo, "workflow": settings_obj.insight_sync_workflow_file},
+        )
+        return RedirectResponse("/insights/metrics", status_code=status.HTTP_303_SEE_OTHER)
 
     @app.get("/insights/{insight_id}", response_class=HTMLResponse)
     async def insight_detail(insight_id: str, request: Request) -> Response:
