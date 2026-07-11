@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from urllib.parse import urlparse
 
+import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -16,7 +17,12 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from agentic_observatory.analysis import build_change_impact_report, report_to_dict
-from agentic_observatory.clients import CollectorClient, GitHubClient, NOCClient
+from agentic_observatory.clients import (
+    CollectorClient,
+    GitHubClient,
+    KnowledgeApiClient,
+    NOCClient,
+)
 from agentic_observatory.config import Settings, get_settings
 from agentic_observatory.db import ObservatoryStore
 from agentic_observatory.domain import (
@@ -108,6 +114,15 @@ def _github(request: Request) -> GitHubClient:
 
 def _knowledge_memory(request: Request) -> KnowledgeLoopMemory:
     return cast(KnowledgeLoopMemory, request.app.state.knowledge_memory)
+
+
+def _knowledge_api(request: Request) -> KnowledgeApiClient:
+    return cast(KnowledgeApiClient, request.app.state.knowledge_api)
+
+
+# Loops the metrics page summarises. Kept small + explicit so a new producer is
+# a one-line change, not a scan of the whole stream.
+METRICS_LOOPS = ("noc", "engineering", "soc", "knowledge")
 
 
 def template_context(request: Request, **kwargs: Any) -> dict[str, Any]:
@@ -335,6 +350,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.noc = NOCClient(settings.noc_base_url, settings.noc_loop_console_secret, timeout=settings.request_timeout_seconds)
     app.state.github = GitHubClient(settings.github_token, timeout=settings.request_timeout_seconds)
     app.state.knowledge_memory = KnowledgeLoopMemory(settings.knowledge_export_db_path)
+    app.state.knowledge_api = KnowledgeApiClient(settings.knowledge_api_base_url, timeout=settings.request_timeout_seconds)
     try:
         yield
     finally:
@@ -350,6 +366,7 @@ def create_app(settings: Settings | None = None, store: ObservatoryStore | None 
         app.state.noc = NOCClient(settings.noc_base_url, settings.noc_loop_console_secret, timeout=settings.request_timeout_seconds)
         app.state.github = GitHubClient(settings.github_token, timeout=settings.request_timeout_seconds)
         app.state.knowledge_memory = KnowledgeLoopMemory(settings.knowledge_export_db_path)
+        app.state.knowledge_api = KnowledgeApiClient(settings.knowledge_api_base_url, timeout=settings.request_timeout_seconds)
     app.mount("/static", StaticFiles(directory="agentic_observatory/static"), name="static")
 
     @app.middleware("http")
@@ -539,6 +556,85 @@ def create_app(settings: Settings | None = None, store: ObservatoryStore | None 
             fingerprint=fingerprint or "",
             sample=sample or "",
         )
+
+    # Declared before /insights/{insight_id} so "metrics" isn't parsed as an id.
+    @app.get("/insights/metrics", response_class=HTMLResponse)
+    async def insights_metrics(request: Request) -> Response:
+        require_session(request, _settings(request))
+        api = _knowledge_api(request)
+        # Fire every loop/source request at once so a slow or unreachable API
+        # degrades within a single request timeout, not one per loop serially.
+        results = await asyncio.gather(
+            *(
+                api.metrics(loop=loop, source=source)
+                for loop in METRICS_LOOPS
+                for source in ("collector", "ledger")
+            )
+        )
+        rows = [
+            {"loop": loop, "live": results[i * 2], "ledger": results[i * 2 + 1]}
+            for i, loop in enumerate(METRICS_LOOPS)
+        ]
+        return render(
+            request,
+            "insights_metrics.html",
+            rows=rows,
+            form_idempotency_key=secrets.token_urlsafe(12),
+        )
+
+    @app.post("/actions/insights/sync")
+    async def action_insight_sync(request: Request) -> Response:
+        settings_obj = _settings(request)
+        session = require_session(request, settings_obj)
+        await validate_session_csrf(request, session, settings_obj)
+        # Gated with the same flag as labelling: syncing persists labels to the
+        # reviewed ledger, so it belongs to the same write-enablement stage.
+        if not settings_obj.action_allowed("insight_label"):
+            raise HTTPException(status_code=403, detail="Observatory action 'insight_label' is not enabled")
+        redirect_to = "/insights/metrics"
+        # Claim the key BEFORE dispatching so even concurrent double-clicks /
+        # proxy retries can't fire a second workflow_dispatch — the atomic
+        # insert is the gate for the side effect, not a prior read (which would
+        # race). A losing claim short-circuits to the redirect.
+        form = await request.form()
+        idempotency_key = str(form.get("idempotency_key") or secrets.token_urlsafe(12))
+        scope = "insight_sync:insight_stream:all"
+        claimed = await _store(request).record_idempotency(
+            scope=scope,
+            key=idempotency_key,
+            actor_id=session.actor_id,
+            result={"redirect": redirect_to},
+        )
+        if not claimed:
+            return RedirectResponse(redirect_to, status_code=status.HTTP_303_SEE_OTHER)
+        # A dispatch failure (missing workflow, token scope) is an expected
+        # rollout state — audit it as failed rather than 500-ing the operator.
+        # status is bounded (audit_events.status is String(40)); detail → payload.
+        dispatch_error = ""
+        try:
+            dispatched = await _github(request).dispatch_workflow(
+                settings_obj.insight_sync_workflow_repo,
+                settings_obj.insight_sync_workflow_file,
+                ref=settings_obj.insight_sync_workflow_ref,
+            )
+            audit_status = "dispatched" if dispatched else "unavailable"
+        except httpx.HTTPError as exc:
+            audit_status = "failed"
+            dispatch_error = str(exc)
+        await _store(request).audit(
+            actor_id=session.actor_id,
+            action="insight_sync",
+            target_type="insight_stream",
+            target_id="all",
+            idempotency_key=idempotency_key,
+            status=audit_status,
+            payload={
+                "repo": settings_obj.insight_sync_workflow_repo,
+                "workflow": settings_obj.insight_sync_workflow_file,
+                "error": dispatch_error,
+            },
+        )
+        return RedirectResponse(redirect_to, status_code=status.HTTP_303_SEE_OTHER)
 
     @app.get("/insights/{insight_id}", response_class=HTMLResponse)
     async def insight_detail(insight_id: str, request: Request) -> Response:

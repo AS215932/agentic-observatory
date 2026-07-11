@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import httpx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -842,3 +843,161 @@ def test_label_form_has_idempotency_key_and_unchecked_gold_refs(tmp_path: Path) 
         # gold refs are opt-in on edit, never preselected
         gold_inputs = re.findall(r'<input type="checkbox" name="gold_ref"[^>]*>', page.text)
         assert gold_inputs and all("checked" not in tag for tag in gold_inputs)
+
+
+# --- insight metrics page + sync button -------------------------------------
+
+
+class FakeKnowledgeApi:
+    async def metrics(self, *, loop=None, source="ledger"):
+        return {
+            "available": True,
+            "source": source,
+            "loop": loop,
+            "metrics": {
+                "idq": 1.0 if source == "ledger" else 0.75,
+                "cgs": 0.5,
+                "silence_rate": 0.2,
+                "label_count": 3,
+                "decision_count": 5,
+            },
+        }
+
+
+class FakeGitHub:
+    def __init__(self) -> None:
+        self.dispatched: list[tuple[str, str, str]] = []
+
+    async def dispatch_workflow(self, repository, workflow_file, *, ref="main"):
+        self.dispatched.append((repository, workflow_file, ref))
+        return True
+
+
+def test_insights_metrics_page_renders_live_and_ledger(tmp_path: Path) -> None:
+    app, _fake = _insight_app(tmp_path)
+    app.state.knowledge_api = FakeKnowledgeApi()
+    with TestClient(app) as client:
+        _login(client)
+        page = client.get("/insights/metrics")
+        assert page.status_code == 200
+        assert "Insight metrics" in page.text
+        assert "live" in page.text and "ledger" in page.text
+        assert "noc" in page.text and "engineering" in page.text
+        assert "0.75" in page.text  # live idq
+        assert "1.0" in page.text  # ledger idq
+
+
+def test_insight_sync_dispatches_workflow_when_enabled(tmp_path: Path) -> None:
+    app, _fake = _insight_app(tmp_path, actions=True, enabled_actions="insight_label")
+    app.state.knowledge_api = FakeKnowledgeApi()
+    gh = FakeGitHub()
+    app.state.github = gh
+    with TestClient(app) as client:
+        csrf = _login(client)
+        resp = client.post(
+            "/actions/insights/sync",
+            data={"csrf_token": csrf},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert gh.dispatched == [("AS215932/knowledge", "insight-sync.yml", "main")]
+
+
+def test_insight_sync_forbidden_when_action_disabled(tmp_path: Path) -> None:
+    app, _fake = _insight_app(tmp_path)  # actions off
+    with TestClient(app) as client:
+        csrf = _login(client)
+        resp = client.post(
+            "/actions/insights/sync",
+            data={"csrf_token": csrf},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 403
+
+
+def test_lifespan_initializes_knowledge_api(tmp_path: Path, monkeypatch: Any) -> None:
+    # Regression: the production path (create_app() with no settings) runs
+    # lifespan(), which must initialize knowledge_api or /insights/metrics 500s.
+    from agentic_observatory import app as app_module
+    from agentic_observatory.clients import KnowledgeApiClient
+
+    settings = Settings(
+        environment="development",
+        database_url=f"sqlite+aiosqlite:///{tmp_path / 'obs.db'}",
+        session_secret="session-secret-for-tests",
+        csrf_secret="csrf-secret-for-tests",
+        operator_username="operator",
+        operator_password_hash="secret",
+    )
+    monkeypatch.setattr(app_module, "get_settings", lambda: settings)
+    application = create_app()  # settings=None -> lifespan path
+    with TestClient(application):
+        assert isinstance(application.state.knowledge_api, KnowledgeApiClient)
+
+
+def _audit_statuses(db_path: Path, action: str) -> list[str]:
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT status FROM audit_events WHERE action = ? ORDER BY created_at",
+            (action,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [row[0] for row in rows]
+
+
+class FakeGitHubBoom:
+    async def dispatch_workflow(self, repository, workflow_file, *, ref="main"):
+        raise httpx.HTTPStatusError("404", request=None, response=None)  # type: ignore[arg-type]
+
+
+def test_insight_sync_audits_failure_instead_of_500(tmp_path: Path) -> None:
+    # A missing companion workflow (404 on dispatch) is an expected rollout
+    # state — the operator gets a redirect + audited "failed", never a 500.
+    app, _fake = _insight_app(tmp_path, actions=True, enabled_actions="insight_label")
+    app.state.knowledge_api = FakeKnowledgeApi()
+    app.state.github = FakeGitHubBoom()
+    with TestClient(app) as client:
+        csrf = _login(client)
+        resp = client.post(
+            "/actions/insights/sync",
+            data={"csrf_token": csrf},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        statuses = _audit_statuses(tmp_path / "obs.db", "insight_sync")
+        # Bounded status (audit_events.status is String(40)) — the full
+        # exception goes in the payload, so a strict DB can't reject the insert.
+        assert statuses and statuses[-1] == "failed"
+        assert all(len(s) <= 40 for s in statuses)
+
+
+def test_insight_sync_deduplicates_on_idempotency_key(tmp_path: Path) -> None:
+    app, _fake = _insight_app(tmp_path, actions=True, enabled_actions="insight_label")
+    app.state.knowledge_api = FakeKnowledgeApi()
+    gh = FakeGitHub()
+    app.state.github = gh
+    with TestClient(app) as client:
+        csrf = _login(client)
+        data = {"csrf_token": csrf, "idempotency_key": "dup-key-1"}
+        first = client.post("/actions/insights/sync", data=data, follow_redirects=False)
+        second = client.post("/actions/insights/sync", data=data, follow_redirects=False)
+        assert first.status_code == 303 and second.status_code == 303
+        # Second submit is suppressed — only one workflow_dispatch fires.
+        assert len(gh.dispatched) == 1
+
+
+def test_record_idempotency_claim_is_atomic(tmp_path: Path) -> None:
+    # The sync route relies on the insert (not a prior read) being the gate, so
+    # a duplicate (scope, key) must lose the claim rather than silently pass.
+    app, _fake = _insight_app(tmp_path)
+
+    async def run() -> tuple[bool, bool]:
+        store = app.state.store
+        first = await store.record_idempotency(scope="s", key="k", actor_id="a", result={})
+        second = await store.record_idempotency(scope="s", key="k", actor_id="a", result={})
+        return first, second
+
+    first, second = asyncio.run(run())
+    assert first is True and second is False

@@ -197,3 +197,45 @@ class GitHubClient:
             response = await client.get(f"https://api.github.com/repos/{repository}/pulls/{number}")
             response.raise_for_status()
             return dict(response.json())
+
+    async def dispatch_workflow(
+        self, repository: str, workflow_file: str, *, ref: str = "main"
+    ) -> bool:
+        """Trigger a workflow_dispatch. Returns True on 204. The durable insight
+        sync runs there as a reviewed PR — never a direct write from here."""
+        if not self.token or not repository or not workflow_file:
+            return False
+        headers = {"Authorization": f"Bearer {self.token}", "Accept": "application/vnd.github+json"}
+        async with httpx.AsyncClient(timeout=self.timeout, headers=headers) as client:
+            response = await client.post(
+                f"https://api.github.com/repos/{repository}/actions/workflows/{workflow_file}/dispatches",
+                json={"ref": ref},
+            )
+            response.raise_for_status()
+        return True
+
+
+class KnowledgeApiClient:
+    """Read-only client for the standalone Knowledge API (insight metrics)."""
+
+    def __init__(self, base_url: AnyHttpUrl | str | None, *, timeout: float = 10.0) -> None:
+        self.base_url = str(base_url).rstrip("/") if base_url else ""
+        self.timeout = timeout
+
+    async def metrics(self, *, loop: str | None = None, source: str = "ledger") -> dict[str, Any]:
+        """IDQ/CGS/silence for one loop from a source. Best-effort: a missing
+        API or an error yields {available: False, reason: ...} so the page
+        degrades instead of 500-ing."""
+        if not self.base_url:
+            return {"available": False, "reason": "knowledge_api_base_url not configured"}
+        params: dict[str, Any] = {"source": source}
+        if loop:
+            params["loop"] = loop
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.get(f"{self.base_url}/v1/insights/metrics", params=params)
+                response.raise_for_status()
+                data = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            return {"available": False, "reason": str(exc)}
+        return {"available": True, **data}
