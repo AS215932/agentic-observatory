@@ -45,7 +45,7 @@ detail.summary or {} %} {% set counts = detail.counts or case.counts or {} %}
     {% endif %}
   </dl>
 </section>
-{% if "feedback" in enabled_actions or "ack" in enabled_actions %}
+{% if ("feedback" in enabled_actions or "ack" in enabled_actions) and (not case.owner_loop or case.owner_loop == 'noc') %}
 <section class="card">
   <h2>Actions</h2>
   {% if "feedback" in enabled_actions %}

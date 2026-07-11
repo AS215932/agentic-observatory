@@ -1,39 +1,40 @@
 {% extends "base.html" %}{% block content %}
-<h1>Handoffs</h1>
+<h1>Cross-loop handoffs</h1>
 <nav class="filters" aria-label="Handoff scope">
-  <a class="{% if scope != 'all' %}selected{% endif %}" href="/handoffs"
-    >Live cases</a
-  >
-  <a
-    class="{% if scope == 'all' %}selected{% endif %}"
-    href="/handoffs?scope=all"
-    >All cases</a
-  >
+  <a class="{% if scope != 'all' %}selected{% endif %}" href="/handoffs">Live cases</a>
+  <a class="{% if scope == 'all' %}selected{% endif %}" href="/handoffs?scope=all">All cases</a>
 </nav>
 <table>
   <thead>
     <tr>
-      <th>Handoff</th>
-      <th>Case</th>
-      <th>Target</th>
-      <th>Status</th>
-      <th>Objective</th>
+      <th>Handoff</th><th>Case</th><th>Route</th><th>Capability</th>
+      <th>Risk / approval</th><th>Status</th><th>Objective</th><th>Updated</th><th>Control</th>
     </tr>
   </thead>
   <tbody>
     {% for handoff in handoffs %}
     <tr>
-      <td>{{ handoff.handoff_id }}</td>
-      <td><a href="/cases/{{ handoff.case_id }}">{{ handoff.case_id }}</a></td>
-      <td>{{ handoff.target_loop }}</td>
+      <td><code>{{ handoff.handoff_id }}</code></td>
+      <td>{% if handoff.case_id %}<a href="/cases/{{ handoff.case_id }}">{{ handoff.case_id }}</a>{% endif %}</td>
+      <td>{{ handoff.source_loop }} → {{ handoff.target_loop }}</td>
+      <td>{{ handoff.capability }}</td>
+      <td>{{ handoff.risk_level }} / {{ handoff.approval_tier }}</td>
       <td>{{ handoff.status }}</td>
       <td>{{ handoff.objective }}</td>
+      <td>{{ handoff.updated_at or handoff.created_at }}</td>
+      <td>
+        {% if "handoff_cancel" in enabled_actions and handoff.status not in ['completed', 'failed', 'cancelled', 'rejected', 'expired'] %}
+        <form method="post" action="/actions/handoffs/{{ handoff.handoff_id }}/cancel">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+          <input type="hidden" name="scope_hash" value="{{ handoff.scope_hash }}" />
+          <input type="hidden" name="idempotency_key" value="cancel-{{ range(1, 999999)|random }}" />
+          <input name="reason" required placeholder="Cancellation reason" />
+          <button>Cancel</button>
+        </form>
+        {% endif %}
+      </td>
     </tr>
-    {% else %}
-    <tr>
-      <td colspan="5">No handoffs.</td>
-    </tr>
-    {% endfor %}
+    {% else %}<tr><td colspan="9">No handoffs.</td></tr>{% endfor %}
   </tbody>
 </table>
 {% endblock %}
