@@ -16,6 +16,7 @@
         ><a href="/insights">Insights</a
         ><a href="/insights/metrics">Metrics</a
         ><a href="/handoffs">Handoffs</a>
+        <a href="/approvals">Approvals</a>
         <a href="/verification">Verification</a
         ><a href="/knowledge">Knowledge</a><a href="/runs">Runs</a>
         <a href="/cross-loop">Cross-loop</a><a href="/changes">Changes</a
@@ -26,13 +27,15 @@
           type="hidden"
           name="csrf_token"
           value="{{ csrf_token }}"
-        /><button>Logout {{ session.actor_id }}</button>
+        /><button>Logout {{ session.actor_login }} ({{ session.role }})</button>
       </form>
       {% endif %}
     </header>
     <main>
       {% if settings.read_only %}
       <p class="banner">Read-only mode: state-changing actions are disabled.</p>
+      {% endif %} {% if not coordinator_available %}
+      <p class="banner">Coordinator shadow fallback: legacy NOC projections are in use.</p>
       {% endif %} {% block content %}{% endblock %}
     </main>
     <footer>

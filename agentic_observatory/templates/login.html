@@ -2,6 +2,10 @@
 %}{% block content %}
 <section class="card narrow">
   <h1>Operator login</h1>
+  {% if settings.github_oauth_enabled %}
+  <p><a class="button" href="/auth/github">Continue with AS215932 GitHub</a></p>
+  <p>Organization membership, enforced 2FA, and the owners/ops role mapping are checked at sign-in.</p>
+  {% endif %} {% if settings.password_login_available %}
   <form method="post" action="/login">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
     <label>Username <input name="username" autocomplete="username" /></label>
@@ -11,5 +15,6 @@
     /></label>
     <button>Login</button>
   </form>
+  {% endif %}
 </section>
 {% endblock %}

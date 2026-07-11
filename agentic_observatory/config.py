@@ -10,7 +10,16 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # actions (feedback, ack) can go live while higher-impact ones (suppress, …)
 # stay gated until a later rollout stage.
 KNOWN_ACTIONS: frozenset[str] = frozenset(
-    {"feedback", "ack", "suppress", "artifact_review", "verification_result", "insight_label"}
+    {
+        "feedback",
+        "ack",
+        "suppress",
+        "artifact_review",
+        "verification_result",
+        "insight_label",
+        "handoff_approval",
+        "handoff_cancel",
+    }
 )
 
 
@@ -26,7 +35,16 @@ class Settings(BaseSettings):
     csrf_secret: str = Field(default="dev-csrf-secret-change-me", min_length=16)
     operator_username: str = "operator"
     operator_password_hash: str = ""
+    local_login_enabled: bool = False
     session_ttl_seconds: int = 12 * 60 * 60
+
+    github_oauth_client_id: str = ""
+    github_oauth_client_secret: str = ""
+    github_oauth_policy_token: str = ""
+    github_oauth_org: str = "AS215932"
+    github_oauth_ops_team_slug: str = "ops"
+    github_oauth_callback_url: str = ""
+    github_oauth_require_org_2fa: bool = True
 
     database_url: str = "sqlite+aiosqlite:///./observatory.db"
 
@@ -37,6 +55,9 @@ class Settings(BaseSettings):
     collector_ingest_token: str = ""
     noc_base_url: AnyHttpUrl | None = None
     noc_loop_console_secret: str = ""
+    coordinator_base_url: AnyHttpUrl | None = None
+    coordinator_key_id: str = "default"
+    coordinator_secret: str = ""
     github_token: str = ""
     knowledge_export_db_path: str = "/opt/knowledge/exports/knowledge.sqlite"
     # Standalone Knowledge read API (insight metrics + concepts). Read-only.
@@ -55,10 +76,27 @@ class Settings(BaseSettings):
     enabled_actions: str = ""
     request_timeout_seconds: float = 10.0
     live_case_max_age_hours: float = 24.0
+    approval_ttl_seconds: int = 15 * 60
 
     @property
     def noc_actions_available(self) -> bool:
         return bool(self.noc_base_url and self.noc_loop_console_secret)
+
+    @property
+    def coordinator_available(self) -> bool:
+        return bool(self.coordinator_base_url and self.coordinator_secret)
+
+    @property
+    def github_oauth_enabled(self) -> bool:
+        return bool(self.github_oauth_client_id and self.github_oauth_client_secret)
+
+    @property
+    def password_login_available(self) -> bool:
+        return self.environment == "development" or self.local_login_enabled
+
+    @property
+    def github_callback_url(self) -> str:
+        return self.github_oauth_callback_url or f"{self.base_url.rstrip('/')}/auth/github/callback"
 
     @property
     def enabled_action_set(self) -> frozenset[str]:

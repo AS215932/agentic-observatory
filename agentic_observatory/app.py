@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import secrets
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -11,6 +12,7 @@ from urllib.parse import urlparse
 
 import httpx
 import uvicorn
+from agent_core.coordination import CoordinatorError
 from fastapi import FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -24,21 +26,29 @@ from agentic_observatory.clients import (
     NOCClient,
 )
 from agentic_observatory.config import Settings, get_settings
+from agentic_observatory.coordination import ObservatoryCoordinator
 from agentic_observatory.db import ObservatoryStore
 from agentic_observatory.domain import (
     LOOP_DESCRIPTORS,
     extract_change_keys,
     normalize_loop_snapshots,
 )
+from agentic_observatory.github_auth import GitHubOAuthClient, GitHubOAuthError
 from agentic_observatory.loop_memory import KnowledgeLoopMemory
 from agentic_observatory.security import (
     CSRF_COOKIE,
+    OAUTH_COOKIE,
+    clear_oauth_cookie,
     clear_session_cookie,
     current_session,
     login_csrf_token,
+    make_oauth_state,
     make_session,
+    oauth_code_challenge,
+    parse_oauth_state,
     require_session,
     session_csrf_token,
+    set_oauth_cookie,
     set_session_cookie,
     validate_login_csrf,
     validate_session_csrf,
@@ -46,6 +56,7 @@ from agentic_observatory.security import (
 )
 
 templates = Jinja2Templates(directory="agentic_observatory/templates")
+LOG = logging.getLogger(__name__)
 
 TERMINAL_CASE_STATUSES = frozenset({"resolved", "closed", "expired", "linked", "split", "merged"})
 ACTIONABLE_CASE_STATUSES = frozenset(
@@ -120,6 +131,14 @@ def _knowledge_api(request: Request) -> KnowledgeApiClient:
     return cast(KnowledgeApiClient, request.app.state.knowledge_api)
 
 
+def _coordinator(request: Request) -> ObservatoryCoordinator:
+    return cast(ObservatoryCoordinator, request.app.state.coordinator)
+
+
+def _github_oauth(request: Request) -> GitHubOAuthClient:
+    return cast(GitHubOAuthClient, request.app.state.github_oauth)
+
+
 # Loops the metrics page summarises. Kept small + explicit so a new producer is
 # a one-line change, not a scan of the whole stream.
 METRICS_LOOPS = ("noc", "engineering", "soc", "knowledge")
@@ -136,6 +155,7 @@ def template_context(request: Request, **kwargs: Any) -> dict[str, Any]:
         "csrf_token": session_csrf_token(session, settings) if session else "",
         "enabled_actions": allowed_actions,
         "actions_enabled": bool(allowed_actions),
+        "coordinator_available": settings.coordinator_available,
     }
     context.update(kwargs)
     return context
@@ -190,7 +210,37 @@ def _sort_by_recent(items: list[dict[str, Any]], *keys: str) -> list[dict[str, A
     return sorted(items, key=lambda item: _timestamp_value(item, *keys), reverse=True)
 
 
+async def _loop_list(request: Request) -> list[dict[str, Any]]:
+    collector_loops = await _collector(request).loops()
+    coordinator = _coordinator(request)
+    if coordinator.available:
+        try:
+            return normalize_loop_snapshots(collector_loops, await coordinator.loops())
+        except CoordinatorError:
+            pass
+    return normalize_loop_snapshots(collector_loops)
+
+
 async def _case_list(request: Request, *, scope: str = "live", status: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+    coordinator = _coordinator(request)
+    if coordinator.available:
+        try:
+            coordinated_cases = await coordinator.cases(status=status, limit=limit)
+            if status or scope == "all":
+                return coordinated_cases
+            settings = _settings(request)
+            now = datetime.now(UTC)
+            return [
+                case
+                for case in coordinated_cases
+                if _case_is_live(
+                    case, now=now, max_age_hours=settings.live_case_max_age_hours
+                )
+            ][:limit]
+        except CoordinatorError:
+            # Dual-read migration: retain the NOC projection until the
+            # coordinator has passed its shadow-read soak.
+            pass
     if status or scope == "all":
         return await _noc(request).cases(status=status, limit=limit)
     settings = _settings(request)
@@ -213,6 +263,27 @@ async def _case_list(request: Request, *, scope: str = "live", status: str | Non
 
 
 async def _artifacts_for_cases(request: Request, cases: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    coordinator = _coordinator(request)
+    if coordinator.available:
+        try:
+            handoffs = await _handoffs_for_cases(request, cases)
+            coordinated: list[dict[str, Any]] = []
+            for handoff in handoffs:
+                for artifact in handoff.get("artifact_refs") or []:
+                    coordinated.append(
+                        {
+                            "artifact_id": artifact.get("ref", ""),
+                            "case_id": handoff.get("case_id", ""),
+                            "artifact_type": artifact.get("kind", "handoff_artifact"),
+                            "review_status": artifact.get("review_status", ""),
+                            "authority_tier": artifact.get("authority", ""),
+                            "summary": handoff.get("result_summary", ""),
+                            "created_at": handoff.get("updated_at", ""),
+                        }
+                    )
+            return _sort_by_recent(coordinated, "created_at")
+        except CoordinatorError:
+            pass
     artifacts: list[dict[str, Any]] = []
     for case in cases:
         case_id = str(case.get("case_id") or "")
@@ -229,6 +300,16 @@ async def _artifacts_for_cases(request: Request, cases: list[dict[str, Any]]) ->
 
 
 async def _handoffs_for_cases(request: Request, cases: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    coordinator = _coordinator(request)
+    if coordinator.available:
+        try:
+            rows = await coordinator.handoffs(limit=500)
+            case_ids = {str(case.get("case_id") or "") for case in cases}
+            if case_ids:
+                rows = [row for row in rows if str(row.get("case_id") or "") in case_ids]
+            return _sort_by_recent(rows, "updated_at", "created_at")
+        except CoordinatorError:
+            pass
     handoffs: list[dict[str, Any]] = []
     for case in cases:
         case_id = str(case.get("case_id") or "")
@@ -238,6 +319,32 @@ async def _handoffs_for_cases(request: Request, cases: list[dict[str, Any]]) -> 
 
 
 async def _verification_objectives_for_cases(request: Request, cases: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    coordinator = _coordinator(request)
+    if coordinator.available:
+        try:
+            rows = await _handoffs_for_cases(request, cases)
+            return [
+                {
+                    "objective_id": f"verify:{row['handoff_id']}",
+                    "handoff_id": row["handoff_id"],
+                    "case_id": row.get("case_id", ""),
+                    "name": row.get("capability", ""),
+                    "status": row.get("verification_verdict") or "pending",
+                    "consecutive_pass_count": row.get("consecutive_passes", 0),
+                    "required_consecutive_passes": row.get("required_consecutive_passes", 1),
+                    "last_checked_at": row.get("verified_at", ""),
+                    "evidence_ref": row.get("verification_summary", ""),
+                }
+                for row in rows
+                if row.get("status") in {
+                    "result_submitted",
+                    "verification_pending",
+                    "completed",
+                    "failed",
+                }
+            ]
+        except CoordinatorError:
+            pass
     objectives: list[dict[str, Any]] = []
     for case in cases:
         case_id = str(case.get("case_id") or "")
@@ -349,6 +456,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.collector = CollectorClient(settings.collector_base_url, timeout=settings.request_timeout_seconds)
     app.state.noc = NOCClient(settings.noc_base_url, settings.noc_loop_console_secret, timeout=settings.request_timeout_seconds)
     app.state.github = GitHubClient(settings.github_token, timeout=settings.request_timeout_seconds)
+    app.state.github_oauth = GitHubOAuthClient(settings)
+    app.state.coordinator = ObservatoryCoordinator.from_settings(settings)
     app.state.knowledge_memory = KnowledgeLoopMemory(settings.knowledge_export_db_path)
     app.state.knowledge_api = KnowledgeApiClient(settings.knowledge_api_base_url, timeout=settings.request_timeout_seconds)
     try:
@@ -365,6 +474,8 @@ def create_app(settings: Settings | None = None, store: ObservatoryStore | None 
         app.state.collector = CollectorClient(settings.collector_base_url, timeout=settings.request_timeout_seconds)
         app.state.noc = NOCClient(settings.noc_base_url, settings.noc_loop_console_secret, timeout=settings.request_timeout_seconds)
         app.state.github = GitHubClient(settings.github_token, timeout=settings.request_timeout_seconds)
+        app.state.github_oauth = GitHubOAuthClient(settings)
+        app.state.coordinator = ObservatoryCoordinator.from_settings(settings)
         app.state.knowledge_memory = KnowledgeLoopMemory(settings.knowledge_export_db_path)
         app.state.knowledge_api = KnowledgeApiClient(settings.knowledge_api_base_url, timeout=settings.request_timeout_seconds)
     app.mount("/static", StaticFiles(directory="agentic_observatory/static"), name="static")
@@ -379,8 +490,28 @@ def create_app(settings: Settings | None = None, store: ObservatoryStore | None 
         return response
 
     @app.get("/healthz")
-    async def healthz() -> dict[str, Any]:
-        return {"status": "ok", "service": "agentic-observatory"}
+    async def healthz(request: Request) -> dict[str, Any]:
+        return {
+            "status": "ok",
+            "service": "agentic-observatory",
+            "coordinator_configured": _coordinator(request).available,
+        }
+
+    @app.get("/readyz")
+    async def readyz(request: Request) -> JSONResponse:
+        coordinator = _coordinator(request)
+        if not coordinator.available:
+            return JSONResponse(
+                {"status": "degraded", "reason": "coordinator_not_configured"},
+                status_code=503,
+            )
+        try:
+            loops = await coordinator.loops()
+        except CoordinatorError as exc:
+            return JSONResponse(
+                {"status": "degraded", "reason": str(exc)}, status_code=503
+            )
+        return JSONResponse({"status": "ready", "registered_loops": len(loops)})
 
     @app.get("/login", response_class=HTMLResponse)
     async def login_form(request: Request) -> Response:
@@ -402,6 +533,11 @@ def create_app(settings: Settings | None = None, store: ObservatoryStore | None 
     async def login(request: Request) -> Response:
         form = await request.form()
         settings_obj = _settings(request)
+        if not settings_obj.password_login_available:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Local password login is disabled; use GitHub organization login",
+            )
         validate_login_csrf(request, str(form.get("csrf_token") or ""), settings_obj)
         username = str(form.get("username") or "")
         password = str(form.get("password") or "")
@@ -409,6 +545,58 @@ def create_app(settings: Settings | None = None, store: ObservatoryStore | None 
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
         cookie_value, _session = make_session(username, settings_obj)
         response = RedirectResponse("/", status_code=status.HTTP_303_SEE_OTHER)
+        set_session_cookie(response, cookie_value, settings_obj)
+        return response
+
+    @app.get("/auth/github")
+    async def github_login(request: Request) -> Response:
+        settings_obj = _settings(request)
+        if not settings_obj.github_oauth_enabled:
+            raise HTTPException(status_code=503, detail="GitHub OAuth is not configured")
+        state_token, verifier, cookie = make_oauth_state(settings_obj)
+        response = RedirectResponse(
+            _github_oauth(request).authorization_url(
+                state=state_token,
+                code_challenge=oauth_code_challenge(verifier),
+            ),
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+        set_oauth_cookie(response, cookie, settings_obj)
+        return response
+
+    @app.get("/auth/github/callback")
+    async def github_callback(request: Request, code: str = "", state: str = "") -> Response:
+        settings_obj = _settings(request)
+        verifier = parse_oauth_state(
+            request.cookies.get(OAUTH_COOKIE), state, settings_obj
+        )
+        if not code or verifier is None:
+            raise HTTPException(status_code=403, detail="Invalid or expired GitHub OAuth state")
+        try:
+            operator = await _github_oauth(request).authenticate(
+                code=code, code_verifier=verifier
+            )
+        except (GitHubOAuthError, httpx.HTTPError) as exc:
+            LOG.warning("GitHub OAuth authentication failed: %s", type(exc).__name__)
+            raise HTTPException(status_code=403, detail="GitHub authentication failed") from exc
+        cookie_value, _session = make_session(
+            f"github:{operator.user_id}",
+            settings_obj,
+            actor_login=operator.login,
+            role=operator.role,
+            auth_method="github",
+        )
+        await _store(request).audit(
+            actor_id=f"github:{operator.user_id}",
+            action="login",
+            target_type="github_identity",
+            target_id=operator.login,
+            idempotency_key=secrets.token_urlsafe(12),
+            status="authenticated",
+            payload={"role": operator.role, "organization": settings_obj.github_oauth_org},
+        )
+        response = RedirectResponse("/", status_code=status.HTTP_303_SEE_OTHER)
+        clear_oauth_cookie(response)
         set_session_cookie(response, cookie_value, settings_obj)
         return response
 
@@ -423,7 +611,7 @@ def create_app(settings: Settings | None = None, store: ObservatoryStore | None 
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request) -> Response:
         require_session(request, _settings(request))
-        loops = normalize_loop_snapshots(await _collector(request).loops())
+        loops = await _loop_list(request)
         cases = await _case_list(request, limit=10)
         runs = await _collector(request).runs(limit=10)
         audit = await _store(request).recent_audit(limit=10)
@@ -432,12 +620,12 @@ def create_app(settings: Settings | None = None, store: ObservatoryStore | None 
     @app.get("/loops", response_class=HTMLResponse)
     async def loops(request: Request) -> Response:
         require_session(request, _settings(request))
-        return render(request, "loops.html", loops=normalize_loop_snapshots(await _collector(request).loops()))
+        return render(request, "loops.html", loops=await _loop_list(request))
 
     @app.get("/loops/{loop_id}", response_class=HTMLResponse)
     async def loop_detail(loop_id: str, request: Request) -> Response:
         require_session(request, _settings(request))
-        loops = normalize_loop_snapshots(await _collector(request).loops())
+        loops = await _loop_list(request)
         loop = next((item for item in loops if item["loop_id"] == loop_id), None)
         if loop is None:
             raise HTTPException(status_code=404, detail="Loop not found")
@@ -453,7 +641,14 @@ def create_app(settings: Settings | None = None, store: ObservatoryStore | None 
     @app.get("/cases/{case_id}", response_class=HTMLResponse)
     async def case_detail(case_id: str, request: Request) -> Response:
         require_session(request, _settings(request))
-        detail = await _noc(request).case_detail(case_id)
+        coordinator = _coordinator(request)
+        if coordinator.available:
+            try:
+                detail = await coordinator.case_detail(case_id)
+            except CoordinatorError:
+                detail = await _noc(request).case_detail(case_id)
+        else:
+            detail = await _noc(request).case_detail(case_id)
         return render(request, "case_detail.html", detail=detail, case_id=case_id)
 
     @app.get("/handoffs", response_class=HTMLResponse)
@@ -461,6 +656,18 @@ def create_app(settings: Settings | None = None, store: ObservatoryStore | None 
         require_session(request, _settings(request))
         cases = await _case_list(request, scope=scope, limit=100)
         return render(request, "handoffs.html", handoffs=await _handoffs_for_cases(request, cases), scope=scope)
+
+    @app.get("/approvals", response_class=HTMLResponse)
+    async def approvals(request: Request) -> Response:
+        require_session(request, _settings(request))
+        coordinator = _coordinator(request)
+        pending: list[dict[str, Any]] = []
+        if coordinator.available:
+            try:
+                pending = await coordinator.approvals()
+            except CoordinatorError:
+                pending = []
+        return render(request, "approvals.html", approvals=pending)
 
     @app.get("/runs", response_class=HTMLResponse)
     async def runs(request: Request) -> Response:
@@ -774,6 +981,114 @@ def create_app(settings: Settings | None = None, store: ObservatoryStore | None 
         reports = [report_to_dict(build_change_impact_report(key)) for key in keys[:25]]
         return render(request, "analysis.html", reports=reports)
 
+    @app.post("/actions/handoffs/{handoff_id}/decision")
+    async def action_handoff_decision(handoff_id: str, request: Request) -> Response:
+        settings_obj = _settings(request)
+        session = require_session(request, settings_obj)
+        await validate_session_csrf(request, session, settings_obj)
+        if not settings_obj.action_allowed("handoff_approval"):
+            raise HTTPException(status_code=403, detail="Handoff approvals are not enabled")
+        coordinator = _coordinator(request)
+        if not coordinator.available:
+            raise HTTPException(status_code=503, detail="Coordinator is unavailable")
+        form = await request.form()
+        decision = str(form.get("decision") or "").strip().lower()
+        if decision not in {"approved", "rejected"}:
+            raise HTTPException(status_code=422, detail="decision must be approved or rejected")
+        record = await coordinator.handoff(handoff_id)
+        submitted_scope = str(form.get("scope_hash") or "")
+        if not submitted_scope or not secrets.compare_digest(
+            submitted_scope, record.envelope.scope_hash
+        ):
+            raise HTTPException(status_code=409, detail="Handoff scope changed; review it again")
+        if record.envelope.approval_tier == "senior" and session.role != "senior":
+            raise HTTPException(status_code=403, detail="Senior approval is required")
+        idempotency_key = str(form.get("idempotency_key") or secrets.token_urlsafe(12))
+        scope = f"handoff_decision:handoff:{handoff_id}"
+        existing = await _store(request).get_idempotency(scope, idempotency_key)
+        if existing is not None:
+            return RedirectResponse("/approvals", status_code=status.HTTP_303_SEE_OTHER)
+        rationale = str(form.get("rationale") or "").strip()[:2000]
+        if not rationale:
+            raise HTTPException(status_code=422, detail="rationale is required")
+        updated = await coordinator.decide(
+            record,
+            decision=decision,
+            actor_id=session.actor_id,
+            actor_login=session.actor_login,
+            actor_role=session.role,
+            rationale=rationale,
+        )
+        result = {
+            "status": updated.status,
+            "decision": decision,
+            "scope_hash": record.envelope.scope_hash,
+        }
+        await _store(request).audit(
+            actor_id=session.actor_id,
+            action="handoff_approval",
+            target_type="handoff",
+            target_id=handoff_id,
+            idempotency_key=idempotency_key,
+            status=decision,
+            payload=result,
+        )
+        await _store(request).record_idempotency(
+            scope=scope,
+            key=idempotency_key,
+            actor_id=session.actor_id,
+            result=result,
+        )
+        return RedirectResponse("/approvals", status_code=status.HTTP_303_SEE_OTHER)
+
+    @app.post("/actions/handoffs/{handoff_id}/cancel")
+    async def action_handoff_cancel(handoff_id: str, request: Request) -> Response:
+        settings_obj = _settings(request)
+        session = require_session(request, settings_obj)
+        await validate_session_csrf(request, session, settings_obj)
+        if not settings_obj.action_allowed("handoff_cancel"):
+            raise HTTPException(status_code=403, detail="Handoff cancellation is not enabled")
+        coordinator = _coordinator(request)
+        if not coordinator.available:
+            raise HTTPException(status_code=503, detail="Coordinator is unavailable")
+        form = await request.form()
+        record = await coordinator.handoff(handoff_id)
+        if (
+            record.envelope.risk_level in {"high", "critical"}
+            or record.envelope.approval_tier == "senior"
+        ) and session.role != "senior":
+            raise HTTPException(status_code=403, detail="Senior cancellation is required")
+        submitted_scope = str(form.get("scope_hash") or "")
+        if not submitted_scope or not secrets.compare_digest(
+            submitted_scope, record.envelope.scope_hash
+        ):
+            raise HTTPException(status_code=409, detail="Handoff scope changed; review it again")
+        reason = str(form.get("reason") or "").strip()[:1000]
+        if not reason:
+            raise HTTPException(status_code=422, detail="cancellation reason is required")
+        idempotency_key = str(form.get("idempotency_key") or secrets.token_urlsafe(12))
+        scope = f"handoff_cancel:handoff:{handoff_id}"
+        existing = await _store(request).get_idempotency(scope, idempotency_key)
+        if existing is None:
+            updated = await coordinator.cancel(handoff_id, reason)
+            result = {"status": updated.status, "scope_hash": record.envelope.scope_hash}
+            await _store(request).audit(
+                actor_id=session.actor_id,
+                action="handoff_cancel",
+                target_type="handoff",
+                target_id=handoff_id,
+                idempotency_key=idempotency_key,
+                status="cancelled",
+                payload=result,
+            )
+            await _store(request).record_idempotency(
+                scope=scope,
+                key=idempotency_key,
+                actor_id=session.actor_id,
+                result=result,
+            )
+        return RedirectResponse("/handoffs", status_code=status.HTTP_303_SEE_OTHER)
+
     async def post_noc_action(
         request: Request,
         *,
@@ -843,6 +1158,12 @@ def create_app(settings: Settings | None = None, store: ObservatoryStore | None 
     @app.get("/api/loops/topology")
     async def api_topology(request: Request) -> JSONResponse:
         require_session(request, _settings(request))
+        coordinator = _coordinator(request)
+        if coordinator.available:
+            try:
+                return JSONResponse(await coordinator.topology())
+            except CoordinatorError:
+                pass
         topology = await _collector(request).topology()
         if not topology.get("nodes"):
             topology = {"nodes": LOOP_DESCRIPTORS, "edges": []}
@@ -851,6 +1172,13 @@ def create_app(settings: Settings | None = None, store: ObservatoryStore | None 
     @app.get("/api/cases/{case_id}/timeline")
     async def api_case_timeline(case_id: str, request: Request) -> JSONResponse:
         require_session(request, _settings(request))
+        coordinator = _coordinator(request)
+        if coordinator.available:
+            try:
+                detail = await coordinator.case_detail(case_id)
+                return JSONResponse({"case_id": case_id, "timeline": detail["timeline"]})
+            except CoordinatorError:
+                pass
         return JSONResponse({"case_id": case_id, "timeline": await _noc(request).case_timeline(case_id)})
 
     @app.get("/api/runs/{run_id}/replay")

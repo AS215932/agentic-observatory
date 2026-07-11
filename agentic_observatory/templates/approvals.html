@@ -1,0 +1,33 @@
+{% extends "base.html" %}{% block content %}
+<h1>Pending approvals</h1>
+<p>Every decision is bound to the displayed immutable scope hash. Senior-tier work can only be decided by an organization owner.</p>
+{% for handoff in approvals %}
+<section class="card">
+  <h2>{{ handoff.capability }}</h2>
+  <dl>
+    <dt>Route</dt><dd>{{ handoff.source_loop }} → {{ handoff.target_loop }}</dd>
+    <dt>Case</dt><dd>{{ handoff.case_id }}</dd>
+    <dt>Risk</dt><dd>{{ handoff.risk_level }}</dd>
+    <dt>Required role</dt><dd>{{ handoff.approval_tier }}</dd>
+    <dt>Intent</dt><dd>{{ handoff.objective }}</dd>
+    <dt>Scope hash</dt><dd><code>{{ handoff.scope_hash }}</code></dd>
+  </dl>
+  <h3>Approved scope</h3>
+  <dl>
+    {% for key, value in handoff.approved_scope.items() %}
+    <dt>{{ key }}</dt><dd>{{ value }}</dd>
+    {% else %}<dt>Scope</dt><dd>No additional whitelisted scope fields.</dd>{% endfor %}
+  </dl>
+  {% if "handoff_approval" in enabled_actions %}
+  <form method="post" action="/actions/handoffs/{{ handoff.handoff_id }}/decision">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+    <input type="hidden" name="scope_hash" value="{{ handoff.scope_hash }}" />
+    <input type="hidden" name="idempotency_key" value="decision-{{ range(1, 999999)|random }}" />
+    <label>Rationale <input name="rationale" required /></label>
+    <button name="decision" value="approved">Approve</button>
+    <button name="decision" value="rejected">Reject</button>
+  </form>
+  {% else %}<p>Approval actions are disabled in this rollout stage.</p>{% endif %}
+</section>
+{% else %}<p>No handoffs await approval.</p>{% endfor %}
+{% endblock %}

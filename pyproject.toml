@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Internal operator console for AS215932 agentic loops"
 requires-python = ">=3.12"
 dependencies = [
-  "agent-core",
+  "agent-core[coordination-client]",
   "argon2-cffi>=23.1",
   "fastapi>=0.116",
   "httpx>=0.27",
@@ -31,7 +31,7 @@ dev = [
 ]
 
 [tool.uv.sources]
-agent-core = { git = "https://github.com/AS215932/agent-core", tag = "v0.8.0" }
+agent-core = { git = "https://github.com/AS215932/agent-core", rev = "46bea255d60501276825fb9be7a75746f6062841" }
 
 [build-system]
 requires = ["hatchling"]

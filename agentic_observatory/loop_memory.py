@@ -6,7 +6,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from agent_core.arbiter import arbitrate_cross_loop_event  # type: ignore[import-untyped]
+from agent_core.arbiter import arbitrate_cross_loop_event
 
 LOOP_ORDER = ("soc", "noc", "engineering", "knowledge")
 
