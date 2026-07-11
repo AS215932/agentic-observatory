@@ -967,7 +967,10 @@ def test_insight_sync_audits_failure_instead_of_500(tmp_path: Path) -> None:
         )
         assert resp.status_code == 303
         statuses = _audit_statuses(tmp_path / "obs.db", "insight_sync")
-        assert statuses and statuses[-1].startswith("failed")
+        # Bounded status (audit_events.status is String(40)) — the full
+        # exception goes in the payload, so a strict DB can't reject the insert.
+        assert statuses and statuses[-1] == "failed"
+        assert all(len(s) <= 40 for s in statuses)
 
 
 def test_insight_sync_deduplicates_on_idempotency_key(tmp_path: Path) -> None:
@@ -983,3 +986,18 @@ def test_insight_sync_deduplicates_on_idempotency_key(tmp_path: Path) -> None:
         assert first.status_code == 303 and second.status_code == 303
         # Second submit is suppressed — only one workflow_dispatch fires.
         assert len(gh.dispatched) == 1
+
+
+def test_record_idempotency_claim_is_atomic(tmp_path: Path) -> None:
+    # The sync route relies on the insert (not a prior read) being the gate, so
+    # a duplicate (scope, key) must lose the claim rather than silently pass.
+    app, _fake = _insight_app(tmp_path)
+
+    async def run() -> tuple[bool, bool]:
+        store = app.state.store
+        first = await store.record_idempotency(scope="s", key="k", actor_id="a", result={})
+        second = await store.record_idempotency(scope="s", key="k", actor_id="a", result={})
+        return first, second
+
+    first, second = asyncio.run(run())
+    assert first is True and second is False

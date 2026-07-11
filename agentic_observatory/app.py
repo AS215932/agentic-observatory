@@ -592,15 +592,25 @@ def create_app(settings: Settings | None = None, store: ObservatoryStore | None 
         if not settings_obj.action_allowed("insight_label"):
             raise HTTPException(status_code=403, detail="Observatory action 'insight_label' is not enabled")
         redirect_to = "/insights/metrics"
-        # A double-click or proxy retry must not fire a second workflow_dispatch
-        # (each opens a ledger-sync PR). Dedupe on the form's idempotency key.
+        # Claim the key BEFORE dispatching so even concurrent double-clicks /
+        # proxy retries can't fire a second workflow_dispatch — the atomic
+        # insert is the gate for the side effect, not a prior read (which would
+        # race). A losing claim short-circuits to the redirect.
         form = await request.form()
         idempotency_key = str(form.get("idempotency_key") or secrets.token_urlsafe(12))
         scope = "insight_sync:insight_stream:all"
-        if await _store(request).get_idempotency(scope, idempotency_key) is not None:
+        claimed = await _store(request).record_idempotency(
+            scope=scope,
+            key=idempotency_key,
+            actor_id=session.actor_id,
+            result={"redirect": redirect_to},
+        )
+        if not claimed:
             return RedirectResponse(redirect_to, status_code=status.HTTP_303_SEE_OTHER)
         # A dispatch failure (missing workflow, token scope) is an expected
         # rollout state — audit it as failed rather than 500-ing the operator.
+        # status is bounded (audit_events.status is String(40)); detail → payload.
+        dispatch_error = ""
         try:
             dispatched = await _github(request).dispatch_workflow(
                 settings_obj.insight_sync_workflow_repo,
@@ -609,7 +619,8 @@ def create_app(settings: Settings | None = None, store: ObservatoryStore | None 
             )
             audit_status = "dispatched" if dispatched else "unavailable"
         except httpx.HTTPError as exc:
-            audit_status = f"failed: {exc}"
+            audit_status = "failed"
+            dispatch_error = str(exc)
         await _store(request).audit(
             actor_id=session.actor_id,
             action="insight_sync",
@@ -617,13 +628,11 @@ def create_app(settings: Settings | None = None, store: ObservatoryStore | None 
             target_id="all",
             idempotency_key=idempotency_key,
             status=audit_status,
-            payload={"repo": settings_obj.insight_sync_workflow_repo, "workflow": settings_obj.insight_sync_workflow_file},
-        )
-        await _store(request).record_idempotency(
-            scope=scope,
-            key=idempotency_key,
-            actor_id=session.actor_id,
-            result={"redirect": redirect_to, "status": audit_status},
+            payload={
+                "repo": settings_obj.insight_sync_workflow_repo,
+                "workflow": settings_obj.insight_sync_workflow_file,
+                "error": dispatch_error,
+            },
         )
         return RedirectResponse(redirect_to, status_code=status.HTTP_303_SEE_OTHER)
 

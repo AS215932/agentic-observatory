@@ -70,7 +70,10 @@ class ObservatoryStore:
 
     async def record_idempotency(
         self, *, scope: str, key: str, actor_id: str, result: dict[str, Any]
-    ) -> None:
+    ) -> bool:
+        """Insert an idempotency record. Returns True if this call won the
+        claim, False if the (scope, key) was already recorded — callers can use
+        the insert itself as the atomic gate for a side effect."""
         async with self.session_factory() as session, session.begin():
             try:
                 await session.execute(
@@ -84,6 +87,8 @@ class ObservatoryStore:
                 )
             except IntegrityError:
                 await session.rollback()
+                return False
+        return True
 
     async def audit(
         self,
