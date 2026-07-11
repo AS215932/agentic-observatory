@@ -556,17 +556,22 @@ def create_app(settings: Settings | None = None, store: ObservatoryStore | None 
             for ref in record.get("evidence_refs") or []
             if isinstance(ref, dict) and str(ref.get("kind") or "").startswith("okf_")
         ]
-        titles = _knowledge_memory(request).concept_titles(
+        docs = _knowledge_memory(request).concept_docs(
             [str(ref.get("ref")) for ref in okf_refs]
         )
         for ref in okf_refs:
-            ref["_title"] = titles.get(str(ref.get("ref")), "")
+            doc = docs.get(str(ref.get("ref")), {})
+            ref["_title"] = doc.get("title", "")
+            ref["_body"] = doc.get("body", "")
+        # Refs whose body we can show inline (concepts resolved in the export).
+        okf_docs = [ref for ref in okf_refs if ref.get("_body")]
         return render(
             request,
             "insight_detail.html",
             item=item,
             record=record,
             okf_refs=okf_refs,
+            okf_docs=okf_docs,
             label=labels_by_insight.get(insight_id),
             form_idempotency_key=secrets.token_urlsafe(12),
         )
