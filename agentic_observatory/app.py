@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from urllib.parse import urlparse
 
+import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -349,6 +350,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.noc = NOCClient(settings.noc_base_url, settings.noc_loop_console_secret, timeout=settings.request_timeout_seconds)
     app.state.github = GitHubClient(settings.github_token, timeout=settings.request_timeout_seconds)
     app.state.knowledge_memory = KnowledgeLoopMemory(settings.knowledge_export_db_path)
+    app.state.knowledge_api = KnowledgeApiClient(settings.knowledge_api_base_url, timeout=settings.request_timeout_seconds)
     try:
         yield
     finally:
@@ -560,14 +562,25 @@ def create_app(settings: Settings | None = None, store: ObservatoryStore | None 
     async def insights_metrics(request: Request) -> Response:
         require_session(request, _settings(request))
         api = _knowledge_api(request)
-        rows = []
-        for loop in METRICS_LOOPS:
-            live, ledger = await asyncio.gather(
-                api.metrics(loop=loop, source="collector"),
-                api.metrics(loop=loop, source="ledger"),
+        # Fire every loop/source request at once so a slow or unreachable API
+        # degrades within a single request timeout, not one per loop serially.
+        results = await asyncio.gather(
+            *(
+                api.metrics(loop=loop, source=source)
+                for loop in METRICS_LOOPS
+                for source in ("collector", "ledger")
             )
-            rows.append({"loop": loop, "live": live, "ledger": ledger})
-        return render(request, "insights_metrics.html", rows=rows)
+        )
+        rows = [
+            {"loop": loop, "live": results[i * 2], "ledger": results[i * 2 + 1]}
+            for i, loop in enumerate(METRICS_LOOPS)
+        ]
+        return render(
+            request,
+            "insights_metrics.html",
+            rows=rows,
+            form_idempotency_key=secrets.token_urlsafe(12),
+        )
 
     @app.post("/actions/insights/sync")
     async def action_insight_sync(request: Request) -> Response:
@@ -578,21 +591,41 @@ def create_app(settings: Settings | None = None, store: ObservatoryStore | None 
         # reviewed ledger, so it belongs to the same write-enablement stage.
         if not settings_obj.action_allowed("insight_label"):
             raise HTTPException(status_code=403, detail="Observatory action 'insight_label' is not enabled")
-        dispatched = await _github(request).dispatch_workflow(
-            settings_obj.insight_sync_workflow_repo,
-            settings_obj.insight_sync_workflow_file,
-            ref=settings_obj.insight_sync_workflow_ref,
-        )
+        redirect_to = "/insights/metrics"
+        # A double-click or proxy retry must not fire a second workflow_dispatch
+        # (each opens a ledger-sync PR). Dedupe on the form's idempotency key.
+        form = await request.form()
+        idempotency_key = str(form.get("idempotency_key") or secrets.token_urlsafe(12))
+        scope = "insight_sync:insight_stream:all"
+        if await _store(request).get_idempotency(scope, idempotency_key) is not None:
+            return RedirectResponse(redirect_to, status_code=status.HTTP_303_SEE_OTHER)
+        # A dispatch failure (missing workflow, token scope) is an expected
+        # rollout state — audit it as failed rather than 500-ing the operator.
+        try:
+            dispatched = await _github(request).dispatch_workflow(
+                settings_obj.insight_sync_workflow_repo,
+                settings_obj.insight_sync_workflow_file,
+                ref=settings_obj.insight_sync_workflow_ref,
+            )
+            audit_status = "dispatched" if dispatched else "unavailable"
+        except httpx.HTTPError as exc:
+            audit_status = f"failed: {exc}"
         await _store(request).audit(
             actor_id=session.actor_id,
             action="insight_sync",
             target_type="insight_stream",
             target_id="all",
-            idempotency_key=secrets.token_urlsafe(12),
-            status="dispatched" if dispatched else "unavailable",
+            idempotency_key=idempotency_key,
+            status=audit_status,
             payload={"repo": settings_obj.insight_sync_workflow_repo, "workflow": settings_obj.insight_sync_workflow_file},
         )
-        return RedirectResponse("/insights/metrics", status_code=status.HTTP_303_SEE_OTHER)
+        await _store(request).record_idempotency(
+            scope=scope,
+            key=idempotency_key,
+            actor_id=session.actor_id,
+            result={"redirect": redirect_to, "status": audit_status},
+        )
+        return RedirectResponse(redirect_to, status_code=status.HTTP_303_SEE_OTHER)
 
     @app.get("/insights/{insight_id}", response_class=HTMLResponse)
     async def insight_detail(insight_id: str, request: Request) -> Response:

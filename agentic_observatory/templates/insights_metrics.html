@@ -12,6 +12,7 @@ Observatory{% endblock %}{% block content %}
 {% if "insight_label" in enabled_actions %}
 <form action="/actions/insights/sync" method="post" class="stack">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+  <input type="hidden" name="idempotency_key" value="{{ form_idempotency_key }}" />
   <button>Sync now</button>
   <span style="font-size: 0.85em; opacity: 0.75"
     >Dispatches the ledger-sync workflow — durable archival lands as a reviewed

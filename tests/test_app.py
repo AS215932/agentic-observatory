@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import httpx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -912,3 +913,73 @@ def test_insight_sync_forbidden_when_action_disabled(tmp_path: Path) -> None:
             follow_redirects=False,
         )
         assert resp.status_code == 403
+
+
+def test_lifespan_initializes_knowledge_api(tmp_path: Path, monkeypatch: Any) -> None:
+    # Regression: the production path (create_app() with no settings) runs
+    # lifespan(), which must initialize knowledge_api or /insights/metrics 500s.
+    from agentic_observatory import app as app_module
+    from agentic_observatory.clients import KnowledgeApiClient
+
+    settings = Settings(
+        environment="development",
+        database_url=f"sqlite+aiosqlite:///{tmp_path / 'obs.db'}",
+        session_secret="session-secret-for-tests",
+        csrf_secret="csrf-secret-for-tests",
+        operator_username="operator",
+        operator_password_hash="secret",
+    )
+    monkeypatch.setattr(app_module, "get_settings", lambda: settings)
+    application = create_app()  # settings=None -> lifespan path
+    with TestClient(application):
+        assert isinstance(application.state.knowledge_api, KnowledgeApiClient)
+
+
+def _audit_statuses(db_path: Path, action: str) -> list[str]:
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT status FROM audit_events WHERE action = ? ORDER BY created_at",
+            (action,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [row[0] for row in rows]
+
+
+class FakeGitHubBoom:
+    async def dispatch_workflow(self, repository, workflow_file, *, ref="main"):
+        raise httpx.HTTPStatusError("404", request=None, response=None)  # type: ignore[arg-type]
+
+
+def test_insight_sync_audits_failure_instead_of_500(tmp_path: Path) -> None:
+    # A missing companion workflow (404 on dispatch) is an expected rollout
+    # state — the operator gets a redirect + audited "failed", never a 500.
+    app, _fake = _insight_app(tmp_path, actions=True, enabled_actions="insight_label")
+    app.state.knowledge_api = FakeKnowledgeApi()
+    app.state.github = FakeGitHubBoom()
+    with TestClient(app) as client:
+        csrf = _login(client)
+        resp = client.post(
+            "/actions/insights/sync",
+            data={"csrf_token": csrf},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        statuses = _audit_statuses(tmp_path / "obs.db", "insight_sync")
+        assert statuses and statuses[-1].startswith("failed")
+
+
+def test_insight_sync_deduplicates_on_idempotency_key(tmp_path: Path) -> None:
+    app, _fake = _insight_app(tmp_path, actions=True, enabled_actions="insight_label")
+    app.state.knowledge_api = FakeKnowledgeApi()
+    gh = FakeGitHub()
+    app.state.github = gh
+    with TestClient(app) as client:
+        csrf = _login(client)
+        data = {"csrf_token": csrf, "idempotency_key": "dup-key-1"}
+        first = client.post("/actions/insights/sync", data=data, follow_redirects=False)
+        second = client.post("/actions/insights/sync", data=data, follow_redirects=False)
+        assert first.status_code == 303 and second.status_code == 303
+        # Second submit is suppressed — only one workflow_dispatch fires.
+        assert len(gh.dispatched) == 1
