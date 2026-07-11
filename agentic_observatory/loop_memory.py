@@ -51,6 +51,25 @@ class KnowledgeLoopMemory:
             return []
         return build_cross_loop_timelines(self._rows(fingerprint=fingerprint, limit=limit))
 
+    def concept_titles(self, concept_ids: list[str]) -> dict[str, str]:
+        """Titles for OKF concept ids (insight evidence display). Best-effort:
+        a missing export/table just yields no titles."""
+        ids = [str(concept_id) for concept_id in concept_ids if concept_id]
+        if not ids or self.db_path is None or not self.db_path.exists():
+            return {}
+        placeholders = ",".join("?" for _ in ids)
+        try:
+            conn = sqlite3.connect(self.db_path)
+            try:
+                rows = conn.execute(
+                    f"SELECT id, title FROM concepts WHERE id IN ({placeholders})", ids
+                ).fetchall()
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            return {}
+        return {str(row[0]): str(row[1] or "") for row in rows}
+
     def _has_loop_decision_table(self) -> bool:
         if self.db_path is None:
             return False

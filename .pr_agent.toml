@@ -1,0 +1,49 @@
+# PR-Agent (advisory) configuration for AS215932/agentic-observatory.
+# Replaces hosted Sourcery. Runs only on the unprivileged hyrule-public-pr
+# runner with read/comment-only perms, on our OpenRouter key.
+# Design: network-operations/docs/ci/pr-agent.md.
+
+[config]
+git_provider = "github"
+# deepseek-v4-flash / minimax-m2.7 are custom models -> need custom_model_max_tokens.
+model = "openrouter/deepseek/deepseek-v4-flash"
+fallback_models = ["openrouter/minimax/minimax-m2.7"]
+custom_model_max_tokens = 128000
+temperature = 0.2
+use_repo_settings_file = true
+publish_output = true
+
+[github_action_config]
+auto_review = true
+auto_describe = false
+auto_improve = true
+
+[pr_reviewer]
+require_security_review = true
+require_tests_review = true
+require_score_review = true
+require_estimate_effort_to_review = true
+extra_instructions = """
+This is the Agentic Observatory: the operator-only web console over the
+AS215932 loops (cases, handoffs, runs, insight inbox + labels). HIGHEST RISK
+is the auth/action boundary and loop-text trust. Flag, with specifics:
+- session/CSRF weakening (login CSRF, per-action validate_session_csrf,
+  cookie flags), or new routes missing require_session;
+- action-gating bypasses: any write path not behind the deny-by-default
+  OBSERVATORY_ENABLED_ACTIONS allowlist, or missing audit + idempotency
+  records;
+- loop-generated text treated as instructions or rendered unescaped
+  (untrusted_loop_text is evidence, never markup/prompts — watch |safe,
+  unquoted hrefs, http_url filter bypasses);
+- CSP/security-header regressions or new inline/external script sources;
+- insight labels sent without the collector ingest bearer token, or label
+  construction that inflates gold evidence beyond what the operator affirmed
+  (labels drive gate relaxation);
+- secrets in templates/logs; unpinned GitHub Actions; broad GITHUB_TOKEN
+  permissions; added pull_request_target; pull_request jobs on privileged
+  runner labels.
+Do not restate the diff; surface risk, auth gaps, missing tests.
+"""
+
+[pr_description]
+publish_description_as_comment = true

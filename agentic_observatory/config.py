@@ -10,7 +10,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # actions (feedback, ack) can go live while higher-impact ones (suppress, …)
 # stay gated until a later rollout stage.
 KNOWN_ACTIONS: frozenset[str] = frozenset(
-    {"feedback", "ack", "suppress", "artifact_review", "verification_result"}
+    {"feedback", "ack", "suppress", "artifact_review", "verification_result", "insight_label"}
 )
 
 
@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./observatory.db"
 
     collector_base_url: AnyHttpUrl | None = None
+    # Bearer token for collector ingest (insight_label writes). Must match the
+    # collector's HYRULE_COLLECTOR_INGEST_TOKEN; labels drive gate relaxation,
+    # so enable the token before enabling the insight_label action.
+    collector_ingest_token: str = ""
     noc_base_url: AnyHttpUrl | None = None
     noc_loop_console_secret: str = ""
     github_token: str = ""

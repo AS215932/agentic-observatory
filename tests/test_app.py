@@ -195,6 +195,7 @@ def _app(
     enabled_actions: str | None = None,
     live_case_max_age_hours: float = 24 * 365 * 10,
     knowledge_export_db_path: str | None = None,
+    collector_ingest_token: str = "",
 ) -> tuple[FastAPI, FakeNOC]:
     if enabled_actions is None:
         enabled_actions = (
@@ -212,6 +213,7 @@ def _app(
         enabled_actions=enabled_actions,
         live_case_max_age_hours=live_case_max_age_hours,
         knowledge_export_db_path=knowledge_export_db_path or str(tmp_path / "missing-knowledge.sqlite"),
+        collector_ingest_token=collector_ingest_token,
     )
     app = create_app(settings)
     asyncio.run(app.state.store.init())
@@ -607,3 +609,199 @@ def _write_loop_decision_db(path: Path) -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+# --- insight inbox -----------------------------------------------------------
+
+
+def _insight_decision(insight_id: str, *, sampling: str = "surfaced", action: str = "notify") -> dict[str, Any]:
+    return {
+        "record_type": "decision",
+        "loop": "noc",
+        "received_at": "2026-07-10T12:00:00+00:00",
+        "record": {
+            "insight_id": insight_id,
+            "loop": "noc",
+            "created_at": "2026-07-10T11:59:00+00:00",
+            "fingerprint": f"fp-{insight_id}",
+            "sampling_class": sampling,
+            "candidate_type": "hotspot",
+            "candidate_source": "proactive_scanner:disk_fill",
+            "action_selected": action,
+            "why_now": "disk trending toward full",
+            "support_facts": ["disk free 5%"],
+            "evidence_refs": [
+                {"kind": "okf_concept", "ref": "curated/lessons/disk-retention", "authority": "A1"},
+                {"kind": "telemetry_probe", "ref": "node_filesystem_avail"},
+            ],
+            "expected_utility": {"total": 0.4},
+            "interruption_cost": {"total": 0.25},
+            "budget_context": {"gate_reason": "within budget"},
+        },
+    }
+
+
+class FakeInsightCollector(FakeCollector):
+    def __init__(self) -> None:
+        self.items: list[dict[str, Any]] = [
+            _insight_decision("ins-surfaced"),
+            _insight_decision("ins-withheld", sampling="withheld_logged", action="stay_silent"),
+        ]
+        self.posted: list[tuple[dict[str, Any], str]] = []
+
+    async def insights(self, *, loop: str | None = None, record_type: str | None = None, since: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
+        return list(self.items)
+
+    async def post_trace_event(self, event: dict[str, Any], *, token: str = "") -> dict[str, Any]:
+        self.posted.append((event, token))
+        return {"status": "stored", "event_id": "ev-1"}
+
+
+def _insight_app(
+    tmp_path: Path,
+    *,
+    actions: bool = False,
+    enabled_actions: str | None = None,
+    collector_ingest_token: str = "test-ingest-token",
+) -> tuple[FastAPI, FakeInsightCollector]:
+    app, _noc = _app(
+        tmp_path,
+        actions=actions,
+        enabled_actions=enabled_actions,
+        collector_ingest_token=collector_ingest_token,
+    )
+    fake = FakeInsightCollector()
+    app.state.collector = fake
+    return app, fake
+
+
+def test_insights_page_shows_withheld_by_default(tmp_path: Path) -> None:
+    app, _fake = _insight_app(tmp_path)
+    with TestClient(app) as client:
+        _login(client)
+        page = client.get("/insights")
+        assert page.status_code == 200
+        assert "ins-surfaced" in page.text
+        assert "ins-withheld" in page.text
+        assert "withheld_logged" in page.text
+
+        sampled = client.get("/insights", params={"sample": "withheld"})
+        assert "ins-withheld" in sampled.text
+        assert "ins-surfaced" not in sampled.text
+
+
+def test_insight_detail_renders_and_hides_label_form_when_disabled(tmp_path: Path) -> None:
+    app, _fake = _insight_app(tmp_path)
+    with TestClient(app) as client:
+        _login(client)
+        page = client.get("/insights/ins-surfaced")
+        assert page.status_code == 200
+        assert "curated/lessons/disk-retention" in page.text
+        assert "Label this decision" not in page.text
+        assert client.get("/insights/ins-missing").status_code == 404
+
+
+def test_insight_label_action_gated_posts_contract_valid_label(tmp_path: Path) -> None:
+    app, fake = _insight_app(tmp_path, actions=True, enabled_actions="insight_label")
+    with TestClient(app) as client:
+        csrf = _login(client)
+        response = client.post(
+            "/actions/insights/ins-surfaced/label",
+            data={
+                "csrf_token": csrf,
+                "disposition": "accept",
+                "comment": "good call",
+                "idempotency_key": "idem-1",
+            },
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+        assert len(fake.posted) == 1
+        event, _token = fake.posted[0]
+        assert event["event_type"] == "insight_label"
+        label = event["payload"]["insight_label"]
+        from agent_core.contracts import InsightLabel
+
+        validated = InsightLabel.model_validate(label)
+        assert validated.reference_action == "notify"
+        assert validated.feedback["disposition"] == "accept"
+        # affirming the insight affirms its OKF citations as gold evidence
+        assert [ref.ref for ref in validated.evidence_refs] == ["curated/lessons/disk-retention"]
+
+        # idempotent double-post does not re-send
+        again = client.post(
+            "/actions/insights/ins-surfaced/label",
+            data={"csrf_token": csrf, "disposition": "accept", "idempotency_key": "idem-1"},
+            follow_redirects=False,
+        )
+        assert again.status_code == 303
+        assert len(fake.posted) == 1
+
+
+def test_insight_label_dismiss_maps_to_stay_silent_reference(tmp_path: Path) -> None:
+    app, fake = _insight_app(tmp_path, actions=True, enabled_actions="insight_label")
+    with TestClient(app) as client:
+        csrf = _login(client)
+        client.post(
+            "/actions/insights/ins-surfaced/label",
+            data={"csrf_token": csrf, "disposition": "dismiss", "idempotency_key": "idem-2"},
+            follow_redirects=False,
+        )
+        label = fake.posted[0][0]["payload"]["insight_label"]
+        assert label["reference_action"] == "stay_silent"
+        assert label["evidence_refs"] == []
+
+
+def test_insight_label_action_denied_when_not_enabled(tmp_path: Path) -> None:
+    app, fake = _insight_app(tmp_path, actions=True, enabled_actions="feedback")
+    with TestClient(app) as client:
+        csrf = _login(client)
+        response = client.post(
+            "/actions/insights/ins-surfaced/label",
+            data={"csrf_token": csrf, "disposition": "accept"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 403
+        assert fake.posted == []
+
+
+def test_insight_label_fails_closed_without_ingest_token(tmp_path: Path) -> None:
+    app, fake = _insight_app(
+        tmp_path, actions=True, enabled_actions="insight_label", collector_ingest_token=""
+    )
+    with TestClient(app) as client:
+        csrf = _login(client)
+        response = client.post(
+            "/actions/insights/ins-surfaced/label",
+            data={"csrf_token": csrf, "disposition": "accept"},
+            follow_redirects=False,
+        )
+        # labels drive gate relaxation: never sent unauthenticated
+        assert response.status_code == 503
+        assert fake.posted == []
+
+
+def test_insight_label_rejects_unknown_reference_action(tmp_path: Path) -> None:
+    app, fake = _insight_app(tmp_path, actions=True, enabled_actions="insight_label")
+    with TestClient(app) as client:
+        csrf = _login(client)
+        response = client.post(
+            "/actions/insights/ins-surfaced/label",
+            data={"csrf_token": csrf, "disposition": "edit", "reference_action": "approve"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 422
+        assert fake.posted == []
+
+
+def test_label_form_has_idempotency_key_and_unchecked_gold_refs(tmp_path: Path) -> None:
+    app, _fake = _insight_app(tmp_path, actions=True, enabled_actions="insight_label")
+    with TestClient(app) as client:
+        _login(client)
+        page = client.get("/insights/ins-surfaced")
+        assert page.status_code == 200
+        # stable per-render idempotency key protects double-clicks
+        assert re.search(r'name="idempotency_key"\s+value="[^"]{8,}"', page.text)
+        # gold refs are opt-in on edit, never preselected
+        gold_inputs = re.findall(r'<input type="checkbox" name="gold_ref"[^>]*>', page.text)
+        assert gold_inputs and all("checked" not in tag for tag in gold_inputs)
