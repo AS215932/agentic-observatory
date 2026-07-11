@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import secrets
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -55,6 +56,7 @@ from agentic_observatory.security import (
 )
 
 templates = Jinja2Templates(directory="agentic_observatory/templates")
+LOG = logging.getLogger(__name__)
 
 TERMINAL_CASE_STATUSES = frozenset({"resolved", "closed", "expired", "linked", "split", "merged"})
 ACTIONABLE_CASE_STATUSES = frozenset(
@@ -575,7 +577,8 @@ def create_app(settings: Settings | None = None, store: ObservatoryStore | None 
                 code=code, code_verifier=verifier
             )
         except (GitHubOAuthError, httpx.HTTPError) as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
+            LOG.warning("GitHub OAuth authentication failed: %s", type(exc).__name__)
+            raise HTTPException(status_code=403, detail="GitHub authentication failed") from exc
         cookie_value, _session = make_session(
             f"github:{operator.user_id}",
             settings_obj,

@@ -4,6 +4,7 @@ import asyncio
 import re
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
@@ -101,6 +102,33 @@ def test_oauth_state_is_signed_scoped_and_one_callback_state(tmp_path: Path) -> 
     assert parse_oauth_state(cookie, state, settings)
     assert parse_oauth_state(cookie, "attacker-state", settings) is None
     assert parse_oauth_state(cookie + "tampered", state, settings) is None
+
+
+def test_oauth_callback_does_not_expose_provider_error_details(tmp_path: Path) -> None:
+    settings = _settings(
+        tmp_path,
+        github_oauth_client_id="client",
+        github_oauth_client_secret="secret",
+        github_oauth_policy_token="org-policy-token",
+    )
+    app = create_app(settings)
+
+    class FailingOAuth:
+        async def authenticate(self, **_kwargs: str) -> None:
+            raise GitHubOAuthError("upstream returned secret diagnostic detail")
+
+    with TestClient(app) as client:
+        login = client.get("/auth/github", follow_redirects=False)
+        state = parse_qs(urlparse(login.headers["location"]).query)["state"][0]
+        app.state.github_oauth = FailingOAuth()
+        response = client.get(
+            "/auth/github/callback",
+            params={"code": "bad-code", "state": state},
+        )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "GitHub authentication failed"
+    assert "secret diagnostic" not in response.text
 
 
 class _FakeCoordinatorClient:
