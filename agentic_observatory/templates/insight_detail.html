@@ -59,6 +59,41 @@ Agentic Observatory{% endblock %}{% block content %}
   </tbody>
 </table>
 
+{% if okf_docs %}
+<style>
+  details.doc {
+    margin: 0.35rem 0;
+    border: 1px solid rgba(128, 128, 128, 0.35);
+    border-radius: 4px;
+    padding: 0.35rem 0.6rem;
+  }
+  details.doc > summary {
+    cursor: pointer;
+  }
+  .doc-body {
+    white-space: pre-wrap;
+    overflow: auto;
+    max-height: 26rem;
+    margin: 0.5rem 0 0;
+    padding: 0.6rem;
+    background: rgba(128, 128, 128, 0.08);
+    font-size: 0.85em;
+    line-height: 1.4;
+  }
+</style>
+<h2>Cited knowledge</h2>
+<p>Expand a concept to read its full document.</p>
+{% for ref in okf_docs %}
+<details class="doc">
+  <summary>
+    <code>{{ ref.ref }}</code> {{ ref._title }}{% if ref.authority %} ·
+    {{ ref.authority }}{% endif %}
+  </summary>
+  <pre class="doc-body">{{ ref._body }}</pre>
+</details>
+{% endfor %}
+{% endif %}
+
 {% if label %}
 <h2>Operator label</h2>
 <dl>

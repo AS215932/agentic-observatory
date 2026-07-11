@@ -657,18 +657,35 @@ class FakeInsightCollector(FakeCollector):
         return {"status": "stored", "event_id": "ev-1"}
 
 
+def _write_concepts_db(path: Path, concept_id: str, title: str, body: str) -> None:
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute(
+            "CREATE TABLE concepts (id TEXT PRIMARY KEY, title TEXT, body TEXT NOT NULL DEFAULT '')"
+        )
+        conn.execute(
+            "INSERT INTO concepts (id, title, body) VALUES (?, ?, ?)",
+            (concept_id, title, body),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _insight_app(
     tmp_path: Path,
     *,
     actions: bool = False,
     enabled_actions: str | None = None,
     collector_ingest_token: str = "test-ingest-token",
+    knowledge_export_db_path: str | None = None,
 ) -> tuple[FastAPI, FakeInsightCollector]:
     app, _noc = _app(
         tmp_path,
         actions=actions,
         enabled_actions=enabled_actions,
         collector_ingest_token=collector_ingest_token,
+        knowledge_export_db_path=knowledge_export_db_path,
     )
     fake = FakeInsightCollector()
     app.state.collector = fake
@@ -699,6 +716,26 @@ def test_insight_detail_renders_and_hides_label_form_when_disabled(tmp_path: Pat
         assert "curated/lessons/disk-retention" in page.text
         assert "Label this decision" not in page.text
         assert client.get("/insights/ins-missing").status_code == 404
+
+
+def test_insight_detail_folds_out_concept_body(tmp_path: Path) -> None:
+    db_path = tmp_path / "knowledge.sqlite"
+    _write_concepts_db(
+        db_path,
+        "curated/lessons/disk-retention",
+        "Disk retention lesson",
+        "Rotate snapshots hourly; the June incident filled root.",
+    )
+    app, _fake = _insight_app(tmp_path, knowledge_export_db_path=str(db_path))
+    with TestClient(app) as client:
+        _login(client)
+        page = client.get("/insights/ins-surfaced")
+        assert page.status_code == 200
+        # the concept body is expandable inline, not just the title
+        assert "Cited knowledge" in page.text
+        assert "Rotate snapshots hourly; the June incident filled root." in page.text
+        # telemetry probes have no OKF body -> not in the fold-out section
+        assert "node_filesystem_avail" in page.text  # still shown in the evidence table
 
 
 def test_insight_label_action_gated_posts_contract_valid_label(tmp_path: Path) -> None:

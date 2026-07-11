@@ -54,6 +54,11 @@ class KnowledgeLoopMemory:
     def concept_titles(self, concept_ids: list[str]) -> dict[str, str]:
         """Titles for OKF concept ids (insight evidence display). Best-effort:
         a missing export/table just yields no titles."""
+        return {cid: doc["title"] for cid, doc in self.concept_docs(concept_ids).items()}
+
+    def concept_docs(self, concept_ids: list[str]) -> dict[str, dict[str, str]]:
+        """Title + body for OKF concept ids, for the evidence fold-out.
+        Best-effort: a missing export/table/column just yields nothing."""
         ids = [str(concept_id) for concept_id in concept_ids if concept_id]
         if not ids or self.db_path is None or not self.db_path.exists():
             return {}
@@ -62,13 +67,16 @@ class KnowledgeLoopMemory:
             conn = sqlite3.connect(self.db_path)
             try:
                 rows = conn.execute(
-                    f"SELECT id, title FROM concepts WHERE id IN ({placeholders})", ids
+                    f"SELECT id, title, body FROM concepts WHERE id IN ({placeholders})", ids
                 ).fetchall()
             finally:
                 conn.close()
         except sqlite3.Error:
             return {}
-        return {str(row[0]): str(row[1] or "") for row in rows}
+        return {
+            str(row[0]): {"title": str(row[1] or ""), "body": str(row[2] or "")}
+            for row in rows
+        }
 
     def _has_loop_decision_table(self) -> bool:
         if self.db_path is None:
